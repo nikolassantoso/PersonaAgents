@@ -52,7 +52,7 @@ def observe_page(page: Page) -> tuple[Locator, str]:
                 )
             };
         })
-        .filter(element => element.visible)
+        .filter(element => element.rendered)
         """
     )
 
