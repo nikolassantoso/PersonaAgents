@@ -117,3 +117,38 @@ Page observation:
         raise RuntimeError("Gemini returned an empty response.")
 
     return elements, decision
+
+def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> TaskResult | None:
+    if decision.action == "finish":
+        if decision.success is None:
+            raise ValueError("A finish decision must include a success value.")
+
+        return TaskResult(success=decision.success, summary=decision.summary)
+
+    if decision.action == "back":
+        page.go_back(wait_until="domcontentloaded", timeout=30_000)
+        return None
+
+    if decision.element_index is None:
+        raise ValueError(f"{decision.action} requires an element index.")
+
+    if not 0 <= decision.element_index <= elements.count():
+        raise ValueError(f"Invalid element index: {decision.element_index}")
+
+    element = elements.nth(decision.element_index)
+
+    if decision.action == "click":
+        element.click(timeout=30_000)
+
+    elif decision.action == "fill":
+        if decision.value is None:
+            raise ValueError("A fill action requires a value")
+        element.fill(decision.value, timeout=30_000)
+
+    elif decision.action == "press":
+        if decision.value is None:
+            raise ValueError("A press action requires a keyboard key.")
+        element.press(decision.value, timeout=30_000)
+
+    page.wait_for_timeout(500)
+    return None
