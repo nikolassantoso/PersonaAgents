@@ -7,7 +7,9 @@ from __future__ import annotations
 from uuid import uuid4
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from persona_agent import run_persona_agent
+from runner import execute_run
 
 from personas import DEFAULT_PERSONAS
 
@@ -33,7 +35,7 @@ async def list_personas() -> dict[str, Persona]:
     return DEFAULT_PERSONAS
 
 @app.post("/runs", status_code=201)
-async def create_run(request: RunRequest) -> dict[str, str]:
+async def create_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
     unknown_personas = [
         persona_name
         for persona_name in request.personas
@@ -57,6 +59,13 @@ async def create_run(request: RunRequest) -> dict[str, str]:
         id=run_id,
         **request.model_dump(),
     )
+
+    background_tasks.add_task(
+        execute_run,
+        RUNS[run_id],
+        run_persona_agent
+    )
+
     return {"run_id": run_id}
 
 @app.get("/runs/{id}")
