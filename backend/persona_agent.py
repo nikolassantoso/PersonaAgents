@@ -60,3 +60,60 @@ def observe_page(page: Page) -> tuple[Locator, str]:
     }
 
     return elements, json.dumps(observation, ensure_ascii=False)
+
+def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int) -> Tuple[Locator, BrowserDecision]:
+    elements, observation = observe_page(page)
+    screenshot = page.screenshot(type="png")
+
+    prompt = f"""
+You are controlling a browser as this user persona:
+
+Name: {persona.name}
+Behavior:
+{persona.system_prompt}
+
+Your assigned task is:
+{task}
+
+This is step {step_number} of {MAX_STEPS}.
+
+Examine the screenshot and page observation, then choose exactly one action.
+
+Action rules:
+- click: provide the element_index to click.
+- fill: provide the element_index and text in value.
+- press: provide the element_index and keyboard key in value.
+- back: navigate to the previous page.
+- finish: use only when the task has succeeded or cannot be completed.
+- For finish, set success to true or false and explain the outcome in summary.
+- Do not claim success merely because the website loaded.
+- Only choose element indexes listed in interactive_elements.
+
+Page observation:
+{observation}
+"""
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            prompt, 
+            types.Part.from_bytes(
+                data=screenshot,
+                mime_type="image/png"
+            ), 
+        ],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=BrowserDecision,
+            temperature=0.2,
+        ),
+    )
+
+    if isinstance(response.parsed, BrowserDecision):
+        decision = response.parsed
+    elif response.text:
+        decision = BrowserDecision.model_validate_json(response.text)
+    else:
+        raise RuntimeError("Gemini returned an empty response.")
+
+    return elements, decision
