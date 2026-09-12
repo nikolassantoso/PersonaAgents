@@ -14,7 +14,7 @@ from urllib.parse import quote_plus
 def format_error(exc: Exception) -> str:
     message = str(exc)
 
-    for variable_name in ("STEEL_API_KEY", "GEMINI_API_KEY"):
+    for variable_name in ("STEEL_API_KEY", "CLAUDE_API_KEY"):
         secret = os.environ.get(variable_name)
 
         if secret:

@@ -1,16 +1,17 @@
+import base64
 import json 
 import os 
 from typing import Literal
 
-from google import genai
-from google.genai import types
+import anthropic
 from playwright.sync_api import Page
 from pydantic import BaseModel
 
 from models import Persona, StepRecord, TaskResult
 
-GEMINI_MODEL = "gemini-3.6-flash"
-MAX_STEPS = 15
+CLAUDE_MODEL = "claude-sonnet-5"
+MAX_OUTPUT_TOKENS = 4096
+MAX_STEPS = 40
 
 INTERACTIVE_SELECTOR = (
     'a, button, input, textarea, select, '
@@ -108,7 +109,7 @@ def format_history(history: list[StepRecord]) -> str:
 
     return "\n".join(lines)
 
-def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord]) -> BrowserDecision:
+def choose_next_action(client: anthropic.Anthropic, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord]) -> BrowserDecision:
     observation = observe_page(page)
     screenshot = page.screenshot(type="png")
 
@@ -161,28 +162,44 @@ Page observation:
 {observation}
 """
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[
-            prompt, 
-            types.Part.from_bytes(
-                data=screenshot,
-                mime_type="image/png"
-            ), 
+    response = client.messages.parse(
+        model=CLAUDE_MODEL,
+        max_tokens=MAX_OUTPUT_TOKENS,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": base64.standard_b64encode(screenshot).decode("ascii"),
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                ],
+            }
         ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=BrowserDecision,
-            temperature=0.2,
-        ),
+        output_format=BrowserDecision,
     )
 
-    if isinstance(response.parsed, BrowserDecision):
-        decision = response.parsed
-    elif response.text:
-        decision = BrowserDecision.model_validate_json(response.text)
-    else:
-        raise RuntimeError("Gemini returned an empty response.")
+    if response.stop_reason == "refusal":
+        raise RuntimeError("Claude refused to act on this page.")
+
+    if response.stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"Claude hit the {MAX_OUTPUT_TOKENS} token output limit "
+            f"before returning a decision."
+        )
+
+    decision = response.parsed_output
+
+    if not isinstance(decision, BrowserDecision):
+        raise RuntimeError("Claude returned no parsable decision.")
 
     return decision
 
@@ -259,11 +276,11 @@ def execute_action(page: Page, decision: BrowserDecision) -> TaskResult | None:
     return None
 
 def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("CLAUDE_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is not set.")
+        raise ValueError("CLAUDE_API_KEY environment variable is not set.")
 
-    client = genai.Client(api_key=api_key)
+    client = anthropic.Anthropic(api_key=api_key)
     history: list[StepRecord] = []
 
     try:
