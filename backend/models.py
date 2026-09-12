@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 # Request / Response Models
 class Persona(BaseModel):
@@ -6,3 +6,10 @@ class Persona(BaseModel):
     name: str
     description: str
     system_prompt: str
+
+class RunRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+    
+    url: HttpUrl
+    personas: list[str] = Field(min_length=1)
+    task: str = Field(min_length=1)
