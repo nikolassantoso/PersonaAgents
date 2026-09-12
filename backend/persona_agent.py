@@ -152,3 +152,35 @@ def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> 
 
     page.wait_for_timeout(500)
     return None
+
+def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is not set.")
+
+    client = genai.Client(api_key=api_key)
+    try:
+        for step_number in range(1, MAX_STEPS + 1):
+            elements, decisions = choose_next_action(
+                client=client, 
+                page=page, 
+                persona=persona, 
+                task=task, 
+                step_number=step_number
+            )
+
+            result = execute_action(
+                page=page, 
+                elements=elements,
+                decision=decisions
+            )
+
+            if result is not None:
+                return result
+
+        return TaskResult(
+            success=False, 
+            summary=(f"The agent reached the maximum of {MAX_STEPS} actions without completing the task.")
+        ) 
+    finally:
+        client.close() 
