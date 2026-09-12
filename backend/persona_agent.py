@@ -44,10 +44,25 @@ def observe_page(page: Page) -> tuple[Locator, str]:
                 aria_label: element.getAttribute("aria-label"),
                 placeholder: element.getAttribute("placeholder"),
                 name: element.getAttribute("name"),
-                visible: rect.width > 0 && rect.height > 0
+                rendered: rect.width > 0 && rect.height > 0,
+                in_viewport: (
+                    rect.width > 0 && rect.height > 0 &&
+                    rect.bottom > 0 && rect.top < window.innerHeight &&
+                    rect.right > 0 && rect.left < window.innerWidth
+                )
             };
         })
         .filter(element => element.visible)
+        """
+    )
+
+    viewport = page.evaluate(
+        """
+        () => ({
+            scroll_y: Math.round(window.scrollY),
+            viewport_height: window.innerHeight,
+            page_height: Math.round(document.documentElement.scrollHeight)
+        })
         """
     )
 
@@ -56,6 +71,11 @@ def observe_page(page: Page) -> tuple[Locator, str]:
     observation = {
         "url": page.url,
         "title": page.title(),
+        "scroll_position": viewport,
+        "at_page_bottom": (
+            viewport["scroll_y"] + viewport["viewport_height"]
+            >= viewport["page_height"] - 2
+        ),
         "body_text": body_text[:6000],
         "interactive_elements": element_details[:100],
     }
@@ -119,6 +139,10 @@ Progress rules:
   with success set to false.
 - If the information the task asks for is already visible in body_text,
   finish now instead of clicking further.
+- Elements with in_viewport set to false are on the page but off screen. Scroll
+  them into view before trying to click them.
+- Do not scroll again if at_page_bottom is true, or if your last two actions
+  were both scrolls in the same direction and no new elements appeared.
 
 In reasoning, state in one or two sentences, in the voice of your persona,
 what you see and why you are choosing this action.
