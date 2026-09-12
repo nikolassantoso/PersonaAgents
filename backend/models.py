@@ -15,9 +15,18 @@ class RunRequest(BaseModel):
     personas: list[str] = Field(min_length=1)
     task: str = Field(min_length=1)
 
+class StepRecord(BaseModel):
+    step: int
+    action: str
+    element_index: int | None = None
+    value: str | None = None
+    reasoning: str = ""
+    outcome: str # "ok" or a failure descriptions
+
 class TaskResult(BaseModel):
     success: bool
     summary: str
+    steps: list[StepRecord] = Field(default_factory=list)
 
 class Run(RunRequest):
     id: str
