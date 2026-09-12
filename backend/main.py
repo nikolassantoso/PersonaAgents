@@ -14,11 +14,14 @@ from personas import DEFAULT_PERSONAS
 load_dotenv()
 
 app = FastAPI(title="PersonaAgent", version="0.1.0")
-RUNS: dict[str, RunRequest] = {}
 
 # Request / Response Models
 from models import Persona
 from models import RunRequest
+from models import Run
+
+# In-memory storage for runs
+RUNS: dict[str, Run] = {}
 
 # REST API routes
 @app.get("/health")
