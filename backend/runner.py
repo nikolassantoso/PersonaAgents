@@ -9,8 +9,26 @@ from personas import DEFAULT_PERSONAS
 
 AgentFunction = Callable[[Page, Persona, str], TaskResult]
 
+import os
+from urllib.parse import quote_plus
+def format_error(exc: Exception) -> str:
+    message = str(exc)
+
+    for variable_name in ("STEEL_API_KEY", "GEMINI_API_KEY"):
+        secret = os.environ.get(variable_name)
+
+        if secret:
+            message = message.replace(secret, "[REDACTED]")
+            message = message.replace(
+                quote_plus(secret),
+                "[REDACTED]",
+            )
+
+    return f"{type(exc).__name__}: {message}"[:2000]
+
 def execute_persona(run: Run, persona: Persona, agent: AgentFunction) -> TaskResult:
-    with open_persona_browser(str(run.url)) as (_, page):
+    with open_persona_browser(str(run.url)) as (session, page):
+        run.session_viewer_urls[persona.id] = session.session_viewer_url
         return agent(page, persona, run.task)
 
 def execute_run(run: Run, agent: AgentFunction) -> None:
@@ -36,7 +54,7 @@ def execute_run(run: Run, agent: AgentFunction) -> None:
                 except Exception as exc:
                     run.errors = {
                         **run.errors,
-                        persona_id: type(exc).__name__,
+                        persona_id: format_error(exc),
                     }
                 else:
                     run.results = {

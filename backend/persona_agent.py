@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from models import Persona, TaskResult
 
 GEMINI_MODEL = "gemini-3.6-flash"
-MAX_STEPS = 15
+MAX_STEPS = 5
 
 INTERACTIVE_SELECTOR = (
     'a, button, input, textarea, select, '
@@ -127,6 +127,14 @@ def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> 
 
     if decision.action == "back":
         page.go_back(wait_until="domcontentloaded", timeout=30_000)
+        return None
+
+    if (decision.action == "press" and decision.element_index is None):
+        if decision.value is None:
+            raise ValueError("A press action requires a keyboard key.")
+
+        page.keyboard.press(decision.value)
+        page.wait_for_timeout(500)
         return None
 
     if decision.element_index is None:
