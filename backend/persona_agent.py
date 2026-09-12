@@ -4,7 +4,7 @@ from typing import Literal
 
 from google import genai
 from google.genai import types
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import Page
 from pydantic import BaseModel
 
 from models import Persona, StepRecord, TaskResult
@@ -26,33 +26,43 @@ class BrowserDecision(BaseModel):
     reasoning: str
     summary: str
 
-def observe_page(page: Page) -> tuple[Locator, str]:
-    elements = page.locator(INTERACTIVE_SELECTOR)
-    element_details = elements.evaluate_all(
+def observe_page(page: Page) -> str:
+    element_details = page.locator(INTERACTIVE_SELECTOR).evaluate_all(
         """
-        elements => elements.map((element, index) => {
-            const rect = element.getBoundingClientRect();
-            
-            return {
-                index,
-                tag: element.tagName.toLowerCase(),
-                type: element.getAttribute("type"),
-                text: (element.innerText || element.value || "")
-                    .replace(/\\s+/g, " ")
-                    .trim()
-                    .slice(0, 200),
-                aria_label: element.getAttribute("aria-label"),
-                placeholder: element.getAttribute("placeholder"),
-                name: element.getAttribute("name"),
-                rendered: rect.width > 0 && rect.height > 0,
-                in_viewport: (
-                    rect.width > 0 && rect.height > 0 &&
-                    rect.bottom > 0 && rect.top < window.innerHeight &&
-                    rect.right > 0 && rect.left < window.innerWidth
-                )
-            };
-        })
-        .filter(element => element.rendered)
+        elements => {
+            document
+                .querySelectorAll("[data-persona-index]")
+                .forEach(stale => stale.removeAttribute("data-persona-index"));
+
+            return elements.map((element, index) => {
+                const rect = element.getBoundingClientRect();
+                const rendered = rect.width > 0 && rect.height > 0;
+
+                if (rendered) {
+                    element.setAttribute("data-persona-index", String(index));
+                }
+
+                return {
+                    index,
+                    tag: element.tagName.toLowerCase(),
+                    type: element.getAttribute("type"),
+                    text: (element.innerText || element.value || "")
+                        .replace(/\\s+/g, " ")
+                        .trim()
+                        .slice(0, 200),
+                    aria_label: element.getAttribute("aria-label"),
+                    placeholder: element.getAttribute("placeholder"),
+                    name: element.getAttribute("name"),
+                    rendered,
+                    in_viewport: (
+                        rendered &&
+                        rect.bottom > 0 && rect.top < window.innerHeight &&
+                        rect.right > 0 && rect.left < window.innerWidth
+                    )
+                };
+            })
+            .filter(element => element.rendered);
+        }
         """
     )
 
@@ -80,7 +90,7 @@ def observe_page(page: Page) -> tuple[Locator, str]:
         "interactive_elements": element_details[:100],
     }
 
-    return elements, json.dumps(observation, ensure_ascii=False)
+    return json.dumps(observation, ensure_ascii=False)
 
 def format_history(history: list[StepRecord]) -> str:
     if not history:
@@ -98,8 +108,8 @@ def format_history(history: list[StepRecord]) -> str:
 
     return "\n".join(lines)
 
-def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord]) -> tuple[Locator, BrowserDecision]:
-    elements, observation = observe_page(page)
+def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord]) -> BrowserDecision:
+    observation = observe_page(page)
     screenshot = page.screenshot(type="png")
 
     prompt = f"""
@@ -174,9 +184,9 @@ Page observation:
     else:
         raise RuntimeError("Gemini returned an empty response.")
 
-    return elements, decision
+    return decision
 
-def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> TaskResult | None:
+def execute_action(page: Page, decision: BrowserDecision) -> TaskResult | None:
     if decision.action == "finish":
         if decision.success is None:
             raise ValueError("A finish decision must include a success value.")
@@ -213,11 +223,23 @@ def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> 
     
     if decision.element_index is None:
         raise ValueError(f"{decision.action} requires an element index.")
-    
-    if not 0 <= decision.element_index < elements.count():
-        raise ValueError(f"Invalid element index: {decision.element_index}")
-    
-    element = elements.nth(decision.element_index)
+
+    element = page.locator(f'[data-persona-index="{decision.element_index}"]')
+    matches = element.count()
+
+    if matches == 0:
+        raise ValueError(
+            f"Element {decision.element_index} is no longer on the page. "
+            f"The page changed after it was observed. Re-read the current "
+            f"observation and choose a different element."
+        )
+
+    if matches > 1:
+        raise ValueError(
+            f"Element {decision.element_index} is ambiguous ({matches} matches). "
+            f"Choose a different element."
+        )
+
     if decision.action == "click":
         element.click(timeout=30_000)
 
@@ -247,7 +269,7 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
     try:
         for step_number in range(1, MAX_STEPS + 1):
             try:
-                elements, decision = choose_next_action(
+                decision = choose_next_action(
                     client=client, 
                     page=page, 
                     persona=persona, 
@@ -272,7 +294,6 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
             try:
                 result = execute_action(
                     page=page,
-                    elements=elements, 
                     decision=decision
                 )
                 outcome = "ok"
