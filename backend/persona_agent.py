@@ -23,6 +23,7 @@ class BrowserDecision(BaseModel):
     element_index: int | None = None
     value: str | None = None
     success: bool | None = None
+    reasoning: str
     summary: str
 
 def observe_page(page: Page) -> tuple[Locator, str]:
