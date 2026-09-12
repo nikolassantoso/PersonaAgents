@@ -132,7 +132,7 @@ def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> 
     if decision.element_index is None:
         raise ValueError(f"{decision.action} requires an element index.")
 
-    if not 0 <= decision.element_index <= elements.count():
+    if not 0 <= decision.element_index < elements.count():
         raise ValueError(f"Invalid element index: {decision.element_index}")
 
     element = elements.nth(decision.element_index)
