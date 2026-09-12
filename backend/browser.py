@@ -1,12 +1,14 @@
 import os
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from urllib.parse import urlencode
 
 from playwright.sync_api import Page, sync_playwright
 from steel import Steel
 from steel.types import Session
 
+@contextmanager
 def open_persona_browser(url: str) -> Iterator[tuple[Session, Page]]:
     api_key = os.environ.get("STEEL_API_KEY")
     if not api_key:
