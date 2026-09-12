@@ -7,7 +7,7 @@ from google.genai import types
 from playwright.sync_api import Locator, Page
 from pydantic import BaseModel
 
-from models import Persona, TaskResult
+from models import Persona, StepRecord, TaskResult
 
 GEMINI_MODEL = "gemini-3.6-flash"
 MAX_STEPS = 15
@@ -19,7 +19,7 @@ INTERACTIVE_SELECTOR = (
 )
 
 class BrowserDecision(BaseModel):
-    action: Literal["click", "fill", "press", "back", "finish"]
+    action: Literal["click", "fill", "press", "back", "scroll", "goto", "finish"]
     element_index: int | None = None
     value: str | None = None
     success: bool | None = None
@@ -62,7 +62,23 @@ def observe_page(page: Page) -> tuple[Locator, str]:
 
     return elements, json.dumps(observation, ensure_ascii=False)
 
-def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int) -> tuple[Locator, BrowserDecision]:
+def format_history(history: list[StepRecord]) -> str:
+    if not history:
+        return "Not yet. This is your first action."
+
+    lines = []
+    for record in history:
+        parts = [f"{record.step}. {record.action}"]
+
+        if record.element_index is not None:
+            parts.append(f"element {record.element_index}")
+        if record.value:
+            parts.append(f"value={record.value!r}")
+        lines.append(f"{' '.join(parts)} -> {record.outcome}")
+
+    return "\n".join(lines)
+
+def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord]) -> tuple[Locator, BrowserDecision]:
     elements, observation = observe_page(page)
     screenshot = page.screenshot(type="png")
 
@@ -78,17 +94,34 @@ Your assigned task is:
 
 This is step {step_number} of {MAX_STEPS}.
 
+Actions you have already taken:
+{format_history(history)}
+
 Examine the screenshot and page observation, then choose exactly one action.
 
 Action rules:
 - click: provide the element_index to click.
 - fill: provide the element_index and text in value.
-- press: provide the element_index and keyboard key in value.
+- press: provide the element_index and keyboard key in value, or omit
+  element_index to send the key to the page itself.
+- scroll: provide "down" or "up" in value.
+- goto: provide an absolute URL in value. Use this only to return to the site
+  under test if you have navigated away from it.
 - back: navigate to the previous page.
 - finish: use only when the task has succeeded or cannot be completed.
 - For finish, set success to true or false and explain the outcome in summary.
 - Do not claim success merely because the website loaded.
 - Only choose element indexes listed in interactive_elements.
+
+Progress rules:
+- Never repeat an action that already appears above with a failed outcome.
+- If the same approach has failed twice, choose a different path or finish
+  with success set to false.
+- If the information the task asks for is already visible in body_text,
+  finish now instead of clicking further.
+
+In reasoning, state in one or two sentences, in the voice of your persona,
+what you see and why you are choosing this action.
 
 Page observation:
 {observation}
@@ -130,6 +163,22 @@ def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> 
         page.go_back(wait_until="domcontentloaded", timeout=30_000)
         return None
 
+    if decision.action == "goto":
+        if decision.value is None:
+            raise ValueError("A goto action requires a URL.")
+        page.goto(decision.value, wait_until="domcontentloaded", timeout=60_000)
+        return None
+ 
+    if decision.action == "scroll":
+        direction = (decision.value or "down").strip().lower()
+        if direction not in ("up", "down"):
+            raise ValueError(f"A scroll action requires 'up' or 'down', got {decision.value!r}.")
+
+        offset = page.evaluate("() => Math.round(window.innerHeight * 0.8)")
+        page.mouse.wheel(0, offset if direction == "down" else -offset)
+        page.wait_for_timeout(500)
+        return None
+
     if (decision.action == "press" and decision.element_index is None):
         if decision.value is None:
             raise ValueError("A press action requires a keyboard key.")
@@ -137,26 +186,27 @@ def execute_action(page: Page, elements: Locator, decision: BrowserDecision) -> 
         page.keyboard.press(decision.value)
         page.wait_for_timeout(500)
         return None
-
+    
     if decision.element_index is None:
         raise ValueError(f"{decision.action} requires an element index.")
-
+    
     if not 0 <= decision.element_index < elements.count():
         raise ValueError(f"Invalid element index: {decision.element_index}")
-
+    
     element = elements.nth(decision.element_index)
-
     if decision.action == "click":
         element.click(timeout=30_000)
 
     elif decision.action == "fill":
         if decision.value is None:
             raise ValueError("A fill action requires a value")
+
         element.fill(decision.value, timeout=30_000)
 
     elif decision.action == "press":
         if decision.value is None:
             raise ValueError("A press action requires a keyboard key.")
+
         element.press(decision.value, timeout=30_000)
 
     page.wait_for_timeout(500)
@@ -168,28 +218,65 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
         raise ValueError("GEMINI_API_KEY environment variable is not set.")
 
     client = genai.Client(api_key=api_key)
+    history: list[StepRecord] = []
+
     try:
         for step_number in range(1, MAX_STEPS + 1):
-            elements, decisions = choose_next_action(
-                client=client, 
-                page=page, 
-                persona=persona, 
-                task=task, 
-                step_number=step_number
-            )
+            try:
+                elements, decision = choose_next_action(
+                    client=client, 
+                    page=page, 
+                    persona=persona, 
+                    task=task, 
+                    step_number=step_number, 
+                    history=history
+                )
+            except Exception as exc:
+                if not history:
+                    raise 
 
-            result = execute_action(
-                page=page, 
-                elements=elements,
-                decision=decisions
+                return TaskResult(
+                    success=False, 
+                    summary=(
+                        f"The model call failed at step {step_number} after "
+                        f"{len(history)} completed actions: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    steps=history,
+                )
+
+            try:
+                result = execute_action(
+                    page=page,
+                    elements=elements, 
+                    decision=decision
+                )
+                outcome = "ok"
+            except Exception as exc:
+                result = None 
+                outcome = f"failed: {type(exc).__name__}: {exc}"
+
+            history.append(
+                StepRecord(
+                    step=step_number,
+                    action=decision.action,
+                    element_index=decision.element_index,
+                    value=decision.value,
+                    reasoning=decision.reasoning,
+                    outcome=outcome,
+                )
             )
 
             if result is not None:
-                return result
+                return result.model_copy(update={"steps": history})
 
         return TaskResult(
-            success=False, 
-            summary=(f"The agent reached the maximum of {MAX_STEPS} actions without completing the task.")
-        ) 
+            success=False,
+            summary=(
+                f"The agent reached the maximum of {MAX_STEPS} actions "
+                f"without completing the task."
+            ),
+            steps=history,
+        )
     finally:
-        client.close() 
+        client.close()
