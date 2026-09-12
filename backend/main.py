@@ -53,5 +53,18 @@ async def create_run(request: RunRequest) -> dict[str, str]:
         )
 
     run_id = str(uuid4())
-    RUNS[run_id] = request
+    RUNS[run_id] = Run(
+        id=run_id,
+        **request.model_dump(),
+    )
     return {"run_id": run_id}
+
+@app.get("/runs/{id}")
+async def get_run(id: str) -> Run:
+    run = RUNS.get(id)
+    if not run:
+        raise HTTPException(
+            status_code=404, 
+            detail="Run not found"
+        )
+    return run
