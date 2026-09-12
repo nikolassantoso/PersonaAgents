@@ -61,7 +61,7 @@ def observe_page(page: Page) -> tuple[Locator, str]:
 
     return elements, json.dumps(observation, ensure_ascii=False)
 
-def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int) -> Tuple[Locator, BrowserDecision]:
+def choose_next_action(client: genai.Client, page: Page, persona: Persona, task: str, step_number: int) -> tuple[Locator, BrowserDecision]:
     elements, observation = observe_page(page)
     screenshot = page.screenshot(type="png")
 
