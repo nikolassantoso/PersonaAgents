@@ -15,6 +15,12 @@ class RunRequest(BaseModel):
     personas: list[str] = Field(min_length=1)
     task: str = Field(min_length=1)
 
+class TaskResult(BaseModel):
+    success: bool
+    summary: str
+
 class Run(RunRequest):
     id: str
     status: Literal["created", "running", "completed", "failed"] = "created"
+    results: dict[str, TaskResult] = Field(default_factory=dict)
+    errors: dict[str, str] = Field(default_factory=dict)
