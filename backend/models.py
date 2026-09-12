@@ -22,5 +22,6 @@ class TaskResult(BaseModel):
 class Run(RunRequest):
     id: str
     status: Literal["created", "running", "completed", "failed"] = "created"
+    session_viewer_urls: dict[str, str] = Field(default_factory=dict)
     results: dict[str, TaskResult] = Field(default_factory=dict)
     errors: dict[str, str] = Field(default_factory=dict)
