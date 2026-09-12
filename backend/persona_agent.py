@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from models import Persona, TaskResult
 
 GEMINI_MODEL = "gemini-3.6-flash"
-MAX_STEPS = 5
+MAX_STEPS = 15
 
 INTERACTIVE_SELECTOR = (
     'a, button, input, textarea, select, '
