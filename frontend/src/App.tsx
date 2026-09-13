@@ -1315,20 +1315,6 @@ function App() {
               </div>
             ))}
           </div>
-          <div className="help-backend">
-            <strong>Connecting your backend</strong>
-            <p>
-              The frontend forwards <code>/api</code> requests to{" "}
-              <code>localhost:8000</code>. Start the FastAPI server with your
-              browser and model credentials. Custom deployments can set{" "}
-              <code>VITE_API_BASE_URL</code>.
-            </p>
-            <p>
-              Demo results are illustrative. Live runs use your real backend.
-              Run history and personas are saved in this browser. Tests use your
-              saved persona definitions; server results are held in memory.
-            </p>
-          </div>
           <div className="modal-actions">
             <button
               className="button secondary"
