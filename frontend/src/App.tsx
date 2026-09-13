@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import { apiAssetUrl, request } from "./api";
+import Improvements from "./Improvements";
+import { canRevamp } from "./revamp";
 import { demoRuns, fallbackPersonas, type Persona, type Run } from "./data";
 import {
   createLocalPersonaId,
@@ -217,29 +220,7 @@ function Modal({
     </div>
   );
 }
-const API = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
 const MAX_PERSPECTIVES = 2;
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    if (response.status === 404 && !path.startsWith("/runs/")) {
-      throw new Error(
-        "The PersonaAgent API was not found. Start the FastAPI backend on port 8000, then try again.",
-      );
-    }
-    throw new Error(
-      typeof body?.detail === "string"
-        ? body.detail
-        : `Request failed (${response.status}). Check that the backend is running.`,
-    );
-  }
-  return response.json();
-}
 function host(url: string) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -297,6 +278,8 @@ function App() {
   const [runs, setRuns] = useState<Run[]>(loadRuns);
   const [modal, setModal] = useState<"run" | "persona" | "help" | null>(null);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
+  const [improvementsRunId, setImprovementsRunId] = useState<string | null>(null);
+  const improvementsButton = useRef<HTMLButtonElement>(null);
   const [selectedPersona, setSelectedPersona] = useState("first_time");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All tests");
@@ -417,12 +400,14 @@ function App() {
     setModal("run");
   }
   function inspect(run: Run) {
+    setImprovementsRunId(null);
     setSelectedPersona(run.personas[0]);
     setSelectedRun(run);
     setReplay(4);
     setReplaying(false);
   }
   function startDemo() {
+    setImprovementsRunId(null);
     setDemo(true);
     setSelectedRun(demoRuns[0]);
     setSelectedPersona("first_time");
@@ -1339,6 +1324,7 @@ function App() {
           subtitle={`${host(detail.url)} · ${detail.id.startsWith("demo") ? "Illustrative demo · not a real website evaluation" : `Run ${detail.id.slice(0, 8)}`}`}
           onClose={() => {
             setSelectedRun(null);
+            setImprovementsRunId(null);
             setReplaying(false);
           }}
         >
@@ -1355,6 +1341,19 @@ function App() {
               Export report
             </button>
           </div>
+          {improvementsRunId === detail.id ? (
+            <Improvements
+              key={detail.id}
+              run={detail}
+              personas={personas}
+              initialPersona={detailPersona}
+              onBack={() => {
+                setImprovementsRunId(null);
+                requestAnimationFrame(() => improvementsButton.current?.focus());
+              }}
+            />
+          ) : (
+            <>
           <div className="detail-tabs">
             {detail.personas.map((id) => (
               <button
@@ -1437,11 +1436,7 @@ function App() {
                         {step.screenshot_url && (
                           <img
                             className="step-screenshot"
-                            src={
-                              /^https?:\/\//i.test(step.screenshot_url)
-                                ? step.screenshot_url
-                                : `${API}/${step.screenshot_url.replace(/^\/+/, "")}`
-                            }
+                            src={apiAssetUrl(step.screenshot_url)}
                             alt={`Screenshot for step ${step.step}: ${step.action.replaceAll("_", " ")}`}
                             loading="lazy"
                             decoding="async"
@@ -1494,6 +1489,15 @@ function App() {
             <p className="form-error" role="status">
               {pollError}
             </p>
+          )}
+          {canRevamp(detail) && (
+            <div className="modal-actions">
+              <button ref={improvementsButton} className="button primary" onClick={() => setImprovementsRunId(detail.id)}>
+                Next: Improvements <Icon name="arrow" size={16} />
+              </button>
+            </div>
+          )}
+            </>
           )}
         </Modal>
       )}
