@@ -63,3 +63,10 @@ npm run lint
 ```
 
 Serve the generated `frontend/dist` folder. For production, configure your host to proxy `/api` to the FastAPI server. Alternatively, set `VITE_API_BASE_URL` at build time to your API URL and configure the backend's CORS policy for the frontend origin. The Vite proxy is a development feature. Typography uses Google Fonts with local system-font fallbacks.
+
+## Gemini image improvements
+
+Generate an improved website image for every persona step using its original
+screenshot, score justification and reasoning. Start with `POST /runs/{run_id}/revamp`,
+then retrieve progress and image URLs with `GET /runs/{run_id}/revamp`.
+See [backend setup, response examples and tests](backend/IMAGE_IMPROVEMENTS.md).

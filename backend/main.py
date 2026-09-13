@@ -15,6 +15,7 @@ from runner import execute_run
 
 from artifacts import screenshot_path
 from personas import PERSONAS
+from revamp import create_revamp_router
 
 load_dotenv()
 
@@ -28,6 +29,7 @@ from models import PersonaCreate
 
 # In-memory storage for runs
 RUNS: dict[str, Run] = {}
+app.include_router(create_revamp_router(RUNS))
 
 def create_persona_id(name: str) -> str:
     persona_id = re.sub(r"[^a-z0-9]+", "_", name.lower())
