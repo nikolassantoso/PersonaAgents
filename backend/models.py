@@ -22,6 +22,7 @@ class StepRecord(BaseModel):
     value: str | None = None
     reasoning: str = ""
     outcome: str # "ok" or a failure descriptions
+    screenshot_url: str | None = None
 
 AccessFailureReason = Literal[
     "website_blocked", "verification_required", "navigation_error", "browser_error"
