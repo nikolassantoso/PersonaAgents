@@ -1,6 +1,7 @@
 import base64
 import json 
 import os 
+from threading import Event
 from typing import Literal
 
 import anthropic
@@ -12,12 +13,17 @@ from models import PageAccessCheck, Persona, StepRecord, TaskResult
 from page_access import PageAccessMonitor
 
 CLAUDE_MODEL = "claude-sonnet-5"
+DEEPSEEK_MODEL = "deepseek-flash"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
+DECISION_TOOL_NAME = "submit_browser_decision"
 MAX_OUTPUT_TOKENS = 4096
 MAX_STEPS = 40
 MAX_BODY_TEXT_CHARS = 40_000
 MAX_REPORTED_ELEMENTS = 400
 MIN_ZOOM_PERCENT = 25
 MAX_ZOOM_PERCENT = 500
+
+_CLAUDE_CREDITS_EXHAUSTED = Event()
 
 INTERACTIVE_SELECTOR = (
     'a, button, input, textarea, select, '
@@ -40,6 +46,63 @@ class BrowserDecision(BaseModel):
         default=None,
         description="Required for a successful finish: justify the score using the full step history and earlier persona reasoning.",
     )
+
+
+def create_model_client(
+    provider: Literal["claude", "deepseek"],
+) -> tuple[anthropic.Anthropic, str]:
+    if provider == "claude":
+        variable_name = "CLAUDE_API_KEY"
+        model = CLAUDE_MODEL
+        base_url = None
+    else:
+        variable_name = "DEEPSEEK_API_KEY"
+        model = DEEPSEEK_MODEL
+        base_url = DEEPSEEK_BASE_URL
+
+    api_key = os.environ.get(variable_name)
+    if not api_key:
+        raise ValueError(f"{variable_name} environment variable is not set.")
+
+    if base_url is None:
+        return anthropic.Anthropic(api_key=api_key), model
+
+    return (
+        anthropic.Anthropic(
+            api_key=api_key,
+            base_url=base_url,
+        ),
+        model,
+    )
+
+
+def is_claude_credit_exhaustion(exc: Exception) -> bool:
+    if not isinstance(exc, anthropic.APIStatusError):
+        return False
+
+    body = exc.body if isinstance(exc.body, dict) else {}
+    error = body.get("error", {})
+
+    if not isinstance(error, dict):
+        return False
+
+    details = error.get("details", {})
+    if not isinstance(details, dict):
+        details = {}
+
+    error_code = details.get("error_code")
+    message = str(error.get("message", "")).lower()
+
+    if error_code == "enforced_spend_limit_reached":
+        return True
+
+    exhaustion_messages = (
+        "you have reached your specified api usage limits",
+        "you have reached your specified workspace api usage limits",
+        "credit balance is too low",
+    )
+
+    return any(text in message for text in exhaustion_messages)
 
 def get_page_zoom_percent(page: Page) -> float:
     """Read the current document's CSS zoom, including after navigation."""
@@ -178,7 +241,7 @@ def format_history(history: list[StepRecord]) -> str:
 
     return "\n".join(lines)
 
-def choose_next_action(client: anthropic.Anthropic, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord], access_check: PageAccessCheck | None = None) -> tuple[BrowserDecision, bytes]:
+def choose_next_action(client: anthropic.Anthropic, model: str, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord], access_check: PageAccessCheck | None = None) -> tuple[BrowserDecision, bytes]:
     observation = observe_page(page, access_check)
     screenshot = page.screenshot(type="png")
 
@@ -278,12 +341,14 @@ action. Call out anything confusing, hard to find, or badly labelled. Those
 observations are the point of this test, and you will be shown your own
 reasoning again on later steps.
 
+Return your decision by calling the {DECISION_TOOL_NAME} tool exactly once.
+
 Page observation:
 {observation}
 """
 
-    response = client.messages.parse(
-        model=CLAUDE_MODEL,
+    response = client.messages.create(
+        model=model,
         max_tokens=MAX_OUTPUT_TOKENS,
         messages=[
             {
@@ -304,22 +369,42 @@ Page observation:
                 ],
             }
         ],
-        output_format=BrowserDecision,
+        tools=[
+            {
+                "name": DECISION_TOOL_NAME,
+                "description": "Submit the next browser action.",
+                "input_schema": BrowserDecision.model_json_schema(),
+            }
+        ],
+        tool_choice={
+            "type": "tool",
+            "name": DECISION_TOOL_NAME,
+        },
     )
 
     if response.stop_reason == "refusal":
-        raise RuntimeError("Claude refused to act on this page.")
+        raise RuntimeError("The model refused to act on this page.")
 
     if response.stop_reason == "max_tokens":
         raise RuntimeError(
-            f"Claude hit the {MAX_OUTPUT_TOKENS} token output limit "
+            f"The model hit the {MAX_OUTPUT_TOKENS} token output limit "
             f"before returning a decision."
         )
 
-    decision = response.parsed_output
+    decision_block = next(
+        (
+            block
+            for block in response.content
+            if block.type == "tool_use"
+            and block.name == DECISION_TOOL_NAME
+        ),
+        None,
+    )
 
-    if not isinstance(decision, BrowserDecision):
-        raise RuntimeError("Claude returned no parsable decision.")
+    if decision_block is None:
+        raise RuntimeError("The model returned no browser decision.")
+
+    decision = BrowserDecision.model_validate(decision_block.input)
 
     return decision, screenshot
 
@@ -418,7 +503,13 @@ def run_persona_agent(
 
     owned_access = access is None
     access = access or PageAccessMonitor.from_environment(page)
+    provider: Literal["claude", "deepseek"] = (
+        "deepseek"
+        if _CLAUDE_CREDITS_EXHAUSTED.is_set()
+        else "claude"
+    )
     client = None
+    model = None
     history: list[StepRecord] = []
     access_checks: list[PageAccessCheck] = []
     previous_failure: tuple | None = None
@@ -437,20 +528,42 @@ def run_persona_agent(
                     access_checks=access_checks,
                 )
             if client is None:
-                api_key = os.environ.get("CLAUDE_API_KEY")
-                if not api_key:
-                    raise ValueError("CLAUDE_API_KEY environment variable is not set.")
-                client = anthropic.Anthropic(api_key=api_key)
+                client, model = create_model_client(provider)
             try:
-                decision, screenshot = choose_next_action(
-                    client=client, 
-                    page=page, 
-                    persona=persona, 
-                    task=task, 
-                    step_number=step_number, 
-                    history=history,
-                    access_check=access_check,
-                )
+                try:
+                    decision, screenshot = choose_next_action(
+                        client=client,
+                        model=model,
+                        page=page,
+                        persona=persona,
+                        task=task,
+                        step_number=step_number,
+                        history=history,
+                        access_check=access_check,
+                    )
+                except anthropic.APIStatusError as exc:
+                    if (
+                        provider != "claude"
+                        or not is_claude_credit_exhaustion(exc)
+                    ):
+                        raise
+
+                    _CLAUDE_CREDITS_EXHAUSTED.set()
+
+                    client.close()
+                    provider = "deepseek"
+                    client, model = create_model_client(provider)
+
+                    decision, screenshot = choose_next_action(
+                        client=client,
+                        model=model,
+                        page=page,
+                        persona=persona,
+                        task=task,
+                        step_number=step_number,
+                        history=history,
+                        access_check=access_check,
+                    )
             except PlaywrightError as exc:
                 return TaskResult(
                     success=False, failure_reason="browser_error",
