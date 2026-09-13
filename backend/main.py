@@ -9,9 +9,11 @@ from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from persona_agent import run_persona_agent
 from runner import execute_run
 
+from artifacts import screenshot_path
 from personas import PERSONAS
 
 load_dotenv()
@@ -105,3 +107,31 @@ async def get_run(id: str) -> Run:
             detail="Run not found"
         )
     return run
+
+
+@app.get(
+    "/runs/{run_id}/personas/{persona_id}/steps/{step}/screenshot",
+    response_class=FileResponse,
+)
+async def get_step_screenshot(
+    run_id: str,
+    persona_id: str,
+    step: int,
+) -> FileResponse:
+    run = RUNS.get(run_id)
+    if not run or persona_id not in run.results:
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    try:
+        path = screenshot_path(run_id, persona_id, step)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Screenshot not found") from None
+
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
