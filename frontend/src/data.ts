@@ -25,6 +25,7 @@ export interface Run {
   url: string;
   task: string;
   personas: string[];
+  persona_definitions?: Record<string, Persona>;
   status: "created" | "running" | "completed" | "failed";
   session_viewer_urls: Record<string, string>;
   results: Record<string, Result>;

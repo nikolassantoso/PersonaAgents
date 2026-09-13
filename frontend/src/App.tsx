@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { demoRuns, fallbackPersonas, type Persona, type Run } from "./data";
+import {
+  createLocalPersonaId,
+  isSavedPersona,
+  loadSavedPersonas,
+  mergePersonas,
+  personaNameKey,
+  savePersonas,
+} from "./personaStorage";
 import "./App.css";
 
 type IconName =
@@ -210,6 +218,7 @@ function Modal({
   );
 }
 const API = (import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/$/, "");
+const MAX_PERSPECTIVES = 2;
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API}${path}`, {
     ...options,
@@ -280,7 +289,10 @@ function loadRuns(): Run[] {
 function App() {
   const [page, setPage] = useState("Overview");
   const [demo, setDemo] = useState(true);
-  const [personas, setPersonas] = useState<Persona[]>(fallbackPersonas);
+  const [personas, setPersonas] = useState<Persona[]>(() => {
+    const saved = loadSavedPersonas();
+    return saved.length ? saved : fallbackPersonas;
+  });
   const [connected, setConnected] = useState(false);
   const [runs, setRuns] = useState<Run[]>(loadRuns);
   const [modal, setModal] = useState<"run" | "persona" | "help" | null>(null);
@@ -294,7 +306,6 @@ function App() {
   const [chosen, setChosen] = useState<string[]>([
     "first_time",
     "power_user",
-    "elderly",
   ]);
   const [toast, setToast] = useState("");
   const [replay, setReplay] = useState(0);
@@ -305,7 +316,9 @@ function App() {
       request<Record<string, Persona>>("/personas")
         .then((data) => {
           if (active) {
-            setPersonas(Object.values(data));
+            setPersonas((current) =>
+              mergePersonas(current.filter(isSavedPersona), Object.values(data)),
+            );
             setConnected(true);
           }
         })
@@ -319,6 +332,14 @@ function App() {
       clearInterval(timer);
     };
   }, []);
+  useEffect(() => {
+    if (!personas.some(isSavedPersona)) return;
+    try {
+      savePersonas(personas);
+    } catch {
+      // Keep server personas usable in memory. Explicit saves report storage errors.
+    }
+  }, [personas]);
   useEffect(() => {
     try {
       localStorage.setItem("persona-runs-v1", JSON.stringify(runs));
@@ -392,7 +413,7 @@ function App() {
   const replayActive = replaying && replay < (result?.steps.length || 0);
   function openRun() {
     setError("");
-    setChosen(personas.map((p) => p.id));
+    setChosen(personas.slice(0, MAX_PERSPECTIVES).map((p) => p.id));
     setModal("run");
   }
   function inspect(run: Run) {
@@ -415,6 +436,10 @@ function App() {
       setError("Select at least one persona to start a test.");
       return;
     }
+    if (chosen.length > MAX_PERSPECTIVES) {
+      setError(`Select at most ${MAX_PERSPECTIVES} perspectives per test.`);
+      return;
+    }
     const form = new FormData(e.currentTarget);
     const url = String(form.get("url")).trim();
     if (!/^https?:\/\//i.test(url)) {
@@ -428,17 +453,27 @@ function App() {
       setError("Describe the goal you want the agents to complete.");
       return;
     }
+    const selected = chosen.map((id) => personas.find((p) => p.id === id));
+    if (selected.some((persona) => !persona)) {
+      setError("A selected perspective is no longer available. Choose your perspectives again.");
+      return;
+    }
+    // Placeholder demo personas have no prompt; resolve those on the server.
+    const personaDefinitions = Object.fromEntries(
+      selected.filter(isSavedPersona).map((persona) => [persona.id, persona]),
+    );
     setBusy(true);
     try {
       const { run_id } = await request<{ run_id: string }>("/runs", {
         method: "POST",
-        body: JSON.stringify({ url, task, personas: chosen }),
+        body: JSON.stringify({ url, task, personas: chosen, persona_definitions: personaDefinitions }),
       });
       const run: Run = {
         id: run_id,
         url,
         task,
         personas: chosen,
+        persona_definitions: personaDefinitions,
         status: "created",
         results: {},
         errors: {},
@@ -461,26 +496,31 @@ function App() {
       setBusy(false);
     }
   }
-  async function submitPersona(e: FormEvent<HTMLFormElement>) {
+  function submitPersona(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
     setError("");
     const form = new FormData(e.currentTarget);
     try {
-      const persona = await request<Persona>("/personas", {
-        method: "POST",
-        body: JSON.stringify(Object.fromEntries(form)),
-      });
-      setPersonas((current) => [
-        ...current.filter((p) => p.id !== persona.id),
-        persona,
-      ]);
+      const name = String(form.get("name") || "").trim();
+      const existing = personas.find((p) => personaNameKey(p.name) === personaNameKey(name));
+      const persona: Persona = {
+        id: existing?.id || createLocalPersonaId(),
+        name,
+        description: String(form.get("description") || "").trim(),
+        system_prompt: String(form.get("system_prompt") || "").trim(),
+      };
+      if (!isSavedPersona(persona)) {
+        setError("Enter a name, description, and behavior instructions within the field limits.");
+        return;
+      }
+      const updated = mergePersonas([persona], personas);
+      savePersonas(updated);
+      setPersonas(updated);
       setModal(null);
-      setToast(`${persona.name} is ready to test.`);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Could not create persona.",
-      );
+      setToast(`${persona.name} is saved in this browser and ready to test.`);
+    } catch {
+      setError("Could not save the persona in this browser. Check that browser storage is available and try again.");
     } finally {
       setBusy(false);
     }
@@ -1112,7 +1152,10 @@ function App() {
               />
             </label>
             <div className="form-label">
-              Choose your perspectives <span>{chosen.length} selected</span>
+              Choose your perspectives
+              <span aria-live="polite">
+                {chosen.length} / {MAX_PERSPECTIVES} selected
+              </span>
             </div>
             <div className="persona-choices">
               {personas.map((p) => (
@@ -1128,11 +1171,17 @@ function App() {
                   <input
                     type="checkbox"
                     checked={chosen.includes(p.id)}
+                    disabled={
+                      !chosen.includes(p.id) &&
+                      chosen.length >= MAX_PERSPECTIVES
+                    }
                     onChange={() =>
                       setChosen((current) =>
                         current.includes(p.id)
                           ? current.filter((id) => id !== p.id)
-                          : [...current, p.id],
+                          : current.length < MAX_PERSPECTIVES
+                            ? [...current, p.id]
+                            : current,
                       )
                     }
                   />
@@ -1208,11 +1257,9 @@ function App() {
                 placeholder="You compare prices, read product details, and look for reviews. Explain your thinking and note any friction you encounter."
               />
             </label>
-            {!connected && (
-              <p className="form-note">
-                Connect the backend to save a custom persona.
-              </p>
-            )}
+            <p className="form-note">
+              Saved in this browser. A matching name replaces your saved version.
+            </p>
             {error && (
               <p role="alert" className="form-error">
                 {error}
@@ -1278,8 +1325,8 @@ function App() {
             </p>
             <p>
               Demo results are illustrative. Live runs use your real backend.
-              Run history is saved in this browser; custom personas and server
-              results are held in server memory.
+              Run history and personas are saved in this browser. Tests use your
+              saved persona definitions; server results are held in memory.
             </p>
           </div>
           <div className="modal-actions">
@@ -1334,7 +1381,7 @@ function App() {
                 }}
               >
                 <Avatar id={id} small />
-                {personas.find((p) => p.id === id)?.name || id}
+                {detail.persona_definitions?.[id]?.name || personas.find((p) => p.id === id)?.name || id}
               </button>
             ))}
           </div>

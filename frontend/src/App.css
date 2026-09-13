@@ -1251,6 +1251,10 @@ textarea {
   background: #f6faf3;
   border-color: #c4d9bf;
 }
+.persona-choice:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .persona-choice > span:not(.avatar) {
   flex: 1;
 }
