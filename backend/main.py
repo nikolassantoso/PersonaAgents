@@ -13,8 +13,10 @@ from fastapi.responses import FileResponse
 from persona_agent import run_persona_agent
 from runner import execute_run
 
-from artifacts import screenshot_path
+from artifacts import fixed_screenshot_path, screenshot_path
+from models import Revamp, RevampImage
 from personas import PERSONAS
+from revamp import execute_revamp, image_settings
 
 load_dotenv()
 
@@ -28,6 +30,7 @@ from models import PersonaCreate
 
 # In-memory storage for runs
 RUNS: dict[str, Run] = {}
+REVAMPS: dict[str, Revamp] = {}
 
 def create_persona_id(name: str) -> str:
     persona_id = re.sub(r"[^a-z0-9]+", "_", name.lower())
@@ -109,6 +112,67 @@ async def get_run(id: str) -> Run:
     return run
 
 
+@app.post("/runs/{id}/revamp", response_model=Revamp, status_code=202)
+async def create_revamp(id: str, background_tasks: BackgroundTasks) -> Revamp:
+    run = RUNS.get(id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.status in ("created", "running"):
+        raise HTTPException(
+            status_code=409,
+            detail="The run must finish before it can be revamped.",
+        )
+
+    existing = REVAMPS.get(id)
+    if existing:
+        return existing
+
+    images = [
+        RevampImage(
+            persona_id=persona_id,
+            step=step.step,
+            original_screenshot_url=step.screenshot_url,
+        )
+        for persona_id, result in run.results.items()
+        for step in result.steps
+        if step.screenshot_url is not None
+    ]
+    if not images:
+        raise HTTPException(
+            status_code=422,
+            detail="The run has no step screenshots to revamp.",
+        )
+
+    try:
+        model, quality = image_settings()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    revamp = Revamp(
+        run_id=id,
+        model=model,
+        quality=quality,
+        total_images=len(images),
+        images=images,
+    )
+    REVAMPS[id] = revamp
+    background_tasks.add_task(execute_revamp, run, PERSONAS, revamp)
+    return revamp
+
+
+@app.get("/runs/{id}/revamp", response_model=Revamp)
+async def get_revamp(id: str) -> Revamp:
+    if id not in RUNS:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    revamp = REVAMPS.get(id)
+    if not revamp:
+        raise HTTPException(status_code=404, detail="Revamp not found")
+
+    return revamp
+
+
 @app.get(
     "/runs/{run_id}/personas/{persona_id}/steps/{step}/screenshot",
     response_class=FileResponse,
@@ -129,6 +193,39 @@ async def get_step_screenshot(
 
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Screenshot not found")
+
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
+@app.get(
+    "/runs/{run_id}/personas/{persona_id}/steps/{step}/screenshot-fixed",
+    response_class=FileResponse,
+)
+async def get_fixed_step_screenshot(
+    run_id: str,
+    persona_id: str,
+    step: int,
+) -> FileResponse:
+    revamp = REVAMPS.get(run_id)
+    if not revamp or not any(
+        image.persona_id == persona_id
+        and image.step == step
+        and image.status == "completed"
+        for image in revamp.images
+    ):
+        raise HTTPException(status_code=404, detail="Fixed screenshot not found")
+
+    try:
+        path = fixed_screenshot_path(run_id, persona_id, step)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Fixed screenshot not found") from None
+
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Fixed screenshot not found")
 
     return FileResponse(
         path,
