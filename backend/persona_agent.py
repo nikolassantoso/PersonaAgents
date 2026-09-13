@@ -7,6 +7,7 @@ import anthropic
 from playwright.sync_api import Error as PlaywrightError, Page
 from pydantic import BaseModel, Field
 
+from artifacts import save_step_screenshot
 from models import PageAccessCheck, Persona, StepRecord, TaskResult
 from page_access import PageAccessMonitor
 
@@ -177,7 +178,7 @@ def format_history(history: list[StepRecord]) -> str:
 
     return "\n".join(lines)
 
-def choose_next_action(client: anthropic.Anthropic, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord], access_check: PageAccessCheck | None = None) -> BrowserDecision:
+def choose_next_action(client: anthropic.Anthropic, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord], access_check: PageAccessCheck | None = None) -> tuple[BrowserDecision, bytes]:
     observation = observe_page(page, access_check)
     screenshot = page.screenshot(type="png")
 
@@ -320,7 +321,7 @@ Page observation:
     if not isinstance(decision, BrowserDecision):
         raise RuntimeError("Claude returned no parsable decision.")
 
-    return decision
+    return decision, screenshot
 
 def execute_action(page: Page, decision: BrowserDecision) -> TaskResult | None:
     if decision.action == "finish":
@@ -405,7 +406,16 @@ def execute_action(page: Page, decision: BrowserDecision) -> TaskResult | None:
     page.wait_for_timeout(500)
     return None
 
-def run_persona_agent(page: Page, persona: Persona, task: str, access: PageAccessMonitor | None = None) -> TaskResult:
+def run_persona_agent(
+    page: Page,
+    persona: Persona,
+    task: str,
+    access: PageAccessMonitor | None = None,
+    run_id: str | None = None,
+) -> TaskResult:
+    if not run_id:
+        raise ValueError("A run ID is required to store step screenshots.")
+
     owned_access = access is None
     access = access or PageAccessMonitor.from_environment(page)
     client = None
@@ -432,7 +442,7 @@ def run_persona_agent(page: Page, persona: Persona, task: str, access: PageAcces
                     raise ValueError("CLAUDE_API_KEY environment variable is not set.")
                 client = anthropic.Anthropic(api_key=api_key)
             try:
-                decision = choose_next_action(
+                decision, screenshot = choose_next_action(
                     client=client, 
                     page=page, 
                     persona=persona, 
@@ -462,6 +472,13 @@ def run_persona_agent(page: Page, persona: Persona, task: str, access: PageAcces
                     access_checks=access_checks,
                 )
 
+            screenshot_url = save_step_screenshot(
+                run_id=run_id,
+                persona_id=persona.id,
+                step=step_number,
+                image=screenshot,
+            )
+
             action_url = page.url
             try:
                 result = execute_action(
@@ -483,6 +500,7 @@ def run_persona_agent(page: Page, persona: Persona, task: str, access: PageAcces
                     value=decision.value,
                     reasoning=decision.reasoning,
                     outcome=outcome,
+                    screenshot_url=screenshot_url,
                 )
             )
 
