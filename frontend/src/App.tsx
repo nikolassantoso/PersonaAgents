@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+import {
+  demoRuns,
+  fallbackPersonas,
+  type Persona,
+  type Run,
+} from "./data";
 import { apiAssetUrl, request } from "./api";
 import Improvements from "./Improvements";
 import { canRevamp } from "./revamp";
-import { demoRuns, fallbackPersonas, type Persona, type Run } from "./data";
 import {
   createLocalPersonaId,
   isSavedPersona,
@@ -31,7 +36,8 @@ type IconName =
   | "download"
   | "help"
   | "clock"
-  | "target";
+  | "target"
+  | "copy";
 function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   const paths: Record<IconName, ReactNode> = {
     grid: (
@@ -90,6 +96,12 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
         <circle cx="12" cy="12" r="1" />
       </>
     ),
+    copy: (
+      <>
+        <rect x="8" y="8" width="11" height="11" rx="1.5" />
+        <path d="M16 8V5H5a1 1 0 0 0-1 1v11h4" />
+      </>
+    ),
   };
   return (
     <svg
@@ -109,24 +121,45 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 }
 function Mark() {
   return (
-    <span className="brand-mark">
-      <span />
-      <span />
-      <span />
+    <span className="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 48 48" fill="none">
+        <path className="mark-orbit" d="M8.5 29.5C4.4 18.9 9.8 7.1 20.4 3" />
+        <path className="mark-orbit mark-orbit-two" d="M27.6 45C38.2 40.9 43.6 29.1 39.5 18.5" />
+        <path className="mark-stroke" d="M15.2 31V13h8.7a6.5 6.5 0 0 1 0 13h-8.7" />
+        <path className="mark-stroke mark-stroke-two" d="M15.2 31V13" />
+        <circle className="mark-core" cx="25.2" cy="19.5" r="2.25" />
+      </svg>
     </span>
   );
 }
 function Avatar({ id, small = false }: { id: string; small?: boolean }) {
+  const tone =
+    id === "power_user"
+      ? "lilac"
+      : id === "elderly"
+        ? "peach"
+        : id === "mobile_user"
+          ? "sky"
+          : id === "accessibility_advocate"
+            ? "sun"
+            : id === "privacy_conscious"
+              ? "violet"
+              : "mint";
+  const icon: IconName =
+    id === "power_user"
+      ? "bolt"
+      : id === "elderly" || id === "mobile_user"
+        ? "globe"
+        : id === "accessibility_advocate"
+          ? "grid"
+          : id === "privacy_conscious"
+            ? "target"
+            : "people";
   return (
     <span
-      className={`avatar ${id === "power_user" ? "lilac" : id === "elderly" ? "peach" : "mint"} ${small ? "small" : ""}`}
+      className={`avatar ${tone} ${small ? "small" : ""}`}
     >
-      <Icon
-        name={
-          id === "power_user" ? "bolt" : id === "elderly" ? "globe" : "people"
-        }
-        size={small ? 14 : 22}
-      />
+      <Icon name={icon} size={small ? 14 : 22} />
     </span>
   );
 }
@@ -231,16 +264,16 @@ function host(url: string) {
 function metrics(runs: Run[]) {
   const results = runs.flatMap((run) => Object.values(run.results));
   const scores = results.flatMap((r) => (r.score == null ? [] : [r.score]));
+  const completed = results.filter((r) => r.success).length;
   return {
-    total: runs.length,
-    success: results.length
-      ? Math.round(
-          (results.filter((r) => r.success).length / results.length) * 100,
-        )
-      : null,
+    runs: runs.length,
+    journeys: results.length,
+    completed,
+    success: results.length ? Math.round((completed / results.length) * 100) : null,
     score: scores.length
       ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1)
       : "—",
+    actions: results.reduce((sum, result) => sum + result.steps.length, 0),
     issues:
       results.filter((r) => !r.success).length +
       runs.reduce((sum, r) => sum + Object.keys(r.errors).length, 0),
@@ -276,7 +309,7 @@ function App() {
   });
   const [connected, setConnected] = useState(false);
   const [runs, setRuns] = useState<Run[]>(loadRuns);
-  const [modal, setModal] = useState<"run" | "persona" | "help" | null>(null);
+  const [modal, setModal] = useState<"run" | "persona" | null>(null);
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
   const [improvementsRunId, setImprovementsRunId] = useState<string | null>(null);
   const improvementsButton = useRef<HTMLButtonElement>(null);
@@ -526,6 +559,7 @@ function App() {
     ["Test runs", "play"],
     ["Personas", "people"],
     ["Insights", "chart"],
+    ["Why we built this", "help"],
   ];
   return (
     <div className="app-shell">
@@ -546,10 +580,10 @@ function App() {
           </span>
         </a>
         <div className="workspace">
-          <span className="workspace-icon">P</span>
+          <span className="workspace-icon"><Icon name="globe" size={16} /></span>
           <div>
-            <strong>My workspace</strong>
-            <span>Personal workspace</span>
+            <strong>Local session</strong>
+            <span>No account required</span>
           </div>
           <span className="workspace-dot" />
         </div>
@@ -587,45 +621,37 @@ function App() {
               <i />
               {connected ? "Backend connected" : "Backend offline"}
             </span>
-            <span className="topbar-divider" />
-            <button
-              className="round-help"
-              aria-label="Getting started"
-              onClick={() => setModal("help")}
-            >
-              <Icon name="help" />
-            </button>
-            <span className="top-avatar">Y</span>
           </div>
         </header>
         <main>
           <div className="page-heading">
             <div>
-              <div className="eyebrow">YOUR USERS. EVERY PERSPECTIVE.</div>
               <h1>
                 {page === "Overview"
-                  ? "See your product differently."
+                  ? "AI personas test what users actually do."
                   : page === "Test runs"
-                    ? "Every journey tells a story."
+                    ? "Run history."
                     : page === "Personas"
-                      ? "Meet your next users."
-                      : "Turn perspective into progress."}
+                      ? "Personas."
+                      : page === "Insights"
+                        ? "Results by persona."
+                        : "Why PersonaAgent exists."}
               </h1>
               <p>
                 {page === "Overview"
-                  ? "Real-world perspectives. Autonomous tests. Better experiences."
+                  ? "AI-powered browser personas navigate a task and explain every action."
                   : page === "Test runs"
-                    ? "Explore what your agents tried, discovered, and accomplished."
+                    ? "Tasks, outcomes, and step-by-step evidence."
                     : page === "Personas"
-                      ? "Different behaviors. Different expectations. One better product."
-                      : "Understand where your experience shines, and where users get stuck."}
+                      ? "Configure the users your tests should represent."
+                      : page === "Insights"
+                        ? "Compare completion and scores across runs."
+                        : "The testing gap we wanted to close."}
               </p>
             </div>
             <button
               className="button primary"
-              aria-label={
-                page === "Personas" ? "Create persona" : "New test run"
-              }
+              aria-label={page === "Personas" ? "Create persona" : "New test run"}
               onClick={
                 page === "Personas"
                   ? () => {
@@ -639,15 +665,15 @@ function App() {
               {page === "Personas" ? "Create persona" : "New test run"}
             </button>
           </div>
-          {page !== "Personas" && (
+          {page !== "Personas" && page !== "Why we built this" && (
             <div className="mode-bar">
               <div>
                 <span className={`mode-dot ${demo ? "" : "live"}`} />
-                <strong>{demo ? "Demo workspace" : "Your workspace"}</strong>
+                <strong>{demo ? "AI persona demo" : "AI test session"}</strong>
                 <span>
                   {demo
-                    ? "You’re exploring sample results. Ready to test your own product?"
-                    : "Your real test runs, saved in this browser."}
+                    ? "Sample results"
+                    : "Saved in this browser"}
                 </span>
               </div>
               <button
@@ -665,33 +691,25 @@ function App() {
           {page === "Overview" && (
             <section className="hero-panel">
               <div className="hero-copy">
-                <div className="hero-kicker">
-                  <span /> BUILT FOR THE HUMAN SIDE OF THE WEB
-                </div>
+                <div className="hero-kicker"><span /> AI-POWERED PERSONA TESTING</div>
                 <h2>
-                  Your code works.
+                  Let AI personas find
                   <br />
-                  Does your experience?
+                  the friction first.
                 </h2>
                 <p>
-                  Let AI agents explore your website as real people.
-                  <br className="desktop-break" /> Find the friction before your
-                  users do.
+                  Give an AI persona a goal. It navigates your site, explains its decisions, and records where the experience breaks.
                 </p>
                 <div className="hero-actions">
                   <button className="button primary" onClick={openRun}>
-                    Test your website <Icon name="arrow" size={17} />
+                    Run a test <Icon name="arrow" size={17} />
                   </button>
                   <button className="text-button" onClick={startDemo}>
                     <span className="play-circle">
                       <Icon name="play" size={12} />
                     </span>
-                    See it in action
+                    View demo
                   </button>
-                </div>
-                <div className="hero-footnote">
-                  <Icon name="check" size={13} />
-                  No scripts to write<span>·</span>Real browser interactions
                 </div>
               </div>
               <div className="orbit-art" aria-hidden="true">
@@ -700,6 +718,10 @@ function App() {
                 <div className="orbit orbit-three" />
                 <div className="orbit-cross horizontal" />
                 <div className="orbit-cross vertical" />
+                <div className="orbit-scan" />
+                <span className="orbit-star star-one" />
+                <span className="orbit-star star-two" />
+                <span className="orbit-star star-three" />
                 <span className="orbit-dot dot-one" />
                 <span className="orbit-dot dot-two" />
                 <div className="center-node">
@@ -730,7 +752,7 @@ function App() {
                   <span className="person-status" />
                 </div>
                 <span className="orbit-caption">
-                  ONE PRODUCT. MANY PERSPECTIVES.
+                  SIX AI PERSONAS. ONE CLEARER PRODUCT.
                 </span>
               </div>
             </section>
@@ -739,28 +761,28 @@ function App() {
             <section className="stats-grid" aria-label="Test statistics">
               {[
                 {
-                  label: "Total test runs",
-                  value: stats.total,
+                  label: "Journeys evaluated",
+                  value: stats.journeys,
                   icon: "play",
-                  foot: "Every journey, accounted for",
+                  foot: `Across ${stats.runs} test runs`,
                 },
                 {
-                  label: "Task completion",
+                  label: "Completion rate",
                   value: stats.success == null ? "—" : `${stats.success}%`,
                   icon: "check",
-                  foot: "Across completed persona results",
+                  foot: `${stats.completed} of ${stats.journeys} persona journeys`,
                 },
                 {
-                  label: "Experience score",
+                  label: "Avg. experience score",
                   value: stats.score,
                   icon: "target",
-                  foot: "Average of scored results",
+                  foot: "Mean score from scored journeys",
                 },
                 {
-                  label: "Issues surfaced",
-                  value: stats.issues,
+                  label: "Interaction steps",
+                  value: stats.actions,
                   icon: "bolt",
-                  foot: "Unsuccessful results and errors",
+                  foot: `${stats.issues} ${stats.issues === 1 ? "friction point" : "friction points"} surfaced`,
                 },
               ].map((stat, i) => (
                 <div className="stat-card" key={stat.label}>
@@ -791,7 +813,7 @@ function App() {
                     {page === "Overview" ? "Recent test runs" : "Test runs"}
                     <span className="count-pill">{displayed.length}</span>
                   </h2>
-                  <p>A closer look at the journeys through your product.</p>
+                  <p>Latest tasks and their outcomes.</p>
                 </div>
                 {page === "Overview" && (
                   <button
@@ -849,19 +871,29 @@ function App() {
                         return (
                           <tr key={run.id}>
                             <td>
-                              <button
-                                className="run-name"
-                                onClick={() => inspect(run)}
-                              >
+                              <div className="run-name">
                                 <span
                                   className={`site-icon ${run.id === "demo-2" ? "lavender" : run.id === "demo-3" ? "orange" : ""}`}
                                 >
                                   <Icon name="globe" size={20} />
                                 </span>
                                 <span>
-                                  <strong>{run.task}</strong>
+                                  <button
+                                    className="run-task"
+                                    onClick={() => inspect(run)}
+                                  >
+                                    <strong>{run.task}</strong>
+                                  </button>
                                   <span>
-                                    {host(run.url)}
+                                    <a
+                                      className="run-link"
+                                      href={run.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      onClick={(event) => event.stopPropagation()}
+                                    >
+                                      {host(run.url)}
+                                    </a>
                                     <span className="run-date">
                                       ·{" "}
                                       {run.id.startsWith("demo")
@@ -870,7 +902,7 @@ function App() {
                                     </span>
                                   </span>
                                 </span>
-                              </button>
+                              </div>
                             </td>
                             <td>
                               <div className="avatar-stack">
@@ -943,12 +975,12 @@ function App() {
                     <h3>
                       {search || filter !== "All tests"
                         ? "No matching tests"
-                        : "Your first perspective starts here."}
+                        : "No test runs yet."}
                     </h3>
                     <p>
                       {search || filter !== "All tests"
                         ? "Try another search or choose a different status."
-                        : "Give your agents a website and a goal. They’ll take it from there."}
+                        : "Add a URL and a task to start collecting evidence."}
                     </p>
                     <button
                       className="button secondary"
@@ -970,23 +1002,23 @@ function App() {
                 <div className="table-footer">
                   <span>
                     {demo
-                      ? "Sample data · Explore any run to see the full journey"
+                      ? "Sample data · Open a run to inspect its actions"
                       : `${visibleRuns.length} test runs · Results refresh automatically`}
                   </span>
                   <span>
                     <Icon name="clock" size={13} />{" "}
-                    {demo ? "Demo preview" : "Live workspace"}
+                    {demo ? "Demo preview" : "Live results"}
                   </span>
                 </div>
               </div>
             </section>
           )}
-          {(page === "Overview" || page === "Personas") && (
+          {page === "Personas" && (
             <section className="personas-section">
               <div className="section-heading">
                 <div>
-                  <h2>A different lens for every user</h2>
-                  <p>Purposeful personas. Meaningful perspectives.</p>
+                  <h2>Personas</h2>
+                  <p>Behavior profiles for your tests.</p>
                 </div>
                 <button
                   className="text-button"
@@ -1000,7 +1032,7 @@ function App() {
                 </button>
               </div>
               <div className="persona-grid">
-                {personas.map((persona, i) => (
+                {personas.map((persona) => (
                   <button
                     className="persona-card"
                     key={persona.id}
@@ -1013,7 +1045,9 @@ function App() {
                     <div className="persona-card-top">
                       <Avatar id={persona.id} />
                       <span className="persona-type">
-                        {i < 3 ? "PRESET PERSONA" : "CUSTOM PERSONA"}
+                        {fallbackPersonas.some((preset) => preset.id === persona.id)
+                          ? "PRESET PERSONA"
+                          : "CUSTOM PERSONA"}
                       </span>
                       <Icon name="arrow" size={17} />
                     </div>
@@ -1030,13 +1064,41 @@ function App() {
                           ? ["Efficient", "Shortcut seeker"]
                           : persona.id === "elderly"
                             ? ["Deliberate", "Larger text"]
-                            : ["Custom perspective"]
+                            : persona.id === "mobile_user"
+                              ? ["Small screen", "Tap friendly"]
+                              : persona.id === "accessibility_advocate"
+                                ? ["Keyboard first", "Clear focus"]
+                                : persona.id === "privacy_conscious"
+                                  ? ["Trust focused", "Consent aware"]
+                            : ["Custom profile"]
                       ).map((trait) => (
                         <span key={trait}>{trait}</span>
                       ))}
                     </div>
                   </button>
                 ))}
+              </div>
+              <div className="persona-guide">
+                <div className="persona-guide-copy">
+                  <div className="guide-kicker"><span /> PERSONA GUIDE</div>
+                  <h2>Write a persona that changes the test.</h2>
+                  <p>Describe how someone behaves, what they know, and what makes them stop. A useful persona creates a different set of actions and observations.</p>
+                  <div className="guide-steps">
+                    <div><b>01</b><span><strong>Name the behavior</strong><small>“Price-conscious shopper” is more useful than “Shopper.”</small></span></div>
+                    <div><b>02</b><span><strong>State the constraints</strong><small>Include device comfort, time pressure, knowledge, or accessibility needs.</small></span></div>
+                    <div><b>03</b><span><strong>Tell the agent what to notice</strong><small>Ask it to explain hesitation, confusing labels, and failed attempts.</small></span></div>
+                  </div>
+                </div>
+                <div className="persona-template">
+                  <div className="template-heading"><span>STARTER TEMPLATE</span><Icon name="copy" size={15} /></div>
+                  <pre>{`You are a [type of user].
+Your goal is to [specific goal].
+You already know [relevant context].
+You struggle with [constraint or risk].
+As you work, explain what you expect,
+what is unclear, and what stops you.`}</pre>
+                  <button className="text-button" onClick={() => { setError(""); setModal("persona"); }}>Use this template <Icon name="arrow" size={15} /></button>
+                </div>
               </div>
             </section>
           )}
@@ -1084,11 +1146,40 @@ function App() {
               <div className="insight-note">
                 <Icon name="help" />
                 <p>
-                  Experience scores reflect each agent’s assessment. Review the
-                  action history and reasoning in each test before deciding what
-                  to change.
+                  AI personas score the experience from their own context. Review
+                  each action and its reasoning before changing the site.
                 </p>
               </div>
+            </section>
+          )}
+          {page === "Why we built this" && (
+            <section className="motivation-page" aria-labelledby="motivation-title">
+              <div className="motivation-intro">
+                <div className="motivation-kicker"><span /> THE REASON THIS EXISTS</div>
+                <h2 id="motivation-title">The hardest bugs are the ones<br className="desktop-break" /> your test suite never sees.</h2>
+                <p>Teams can prove that a button works. They still need to know whether a new user can find it, understand it, and use it without hesitation.</p>
+              </div>
+              <div className="motivation-grid">
+                <article className="motivation-card motivation-card-featured">
+                  <span className="motivation-number">01</span>
+                  <h3>Scripted tests follow instructions.</h3>
+                  <p>They are excellent at protecting known paths. But they begin with the answer: the exact selector, the expected click, and the happy path.</p>
+                  <div className="motivation-line"><span className="line-dot" /> Known path <span className="line-arrow">→</span> predictable result</div>
+                </article>
+                <article className="motivation-card">
+                  <span className="motivation-number">02</span>
+                  <h3>People bring context.</h3>
+                  <p>First-time visitors need guidance. Power users look for shortcuts. Older adults need legible controls. The same interface can fail in different ways.</p>
+                  <div className="motivation-personas"><Avatar id="first_time" small /><Avatar id="power_user" small /><Avatar id="elderly" small /><Avatar id="mobile_user" small /><span>six behavior profiles</span></div>
+                </article>
+                <article className="motivation-card">
+                  <span className="motivation-number">03</span>
+                  <h3>PersonaAgent makes that visible.</h3>
+                  <p>We give AI personas a goal and a behavior profile. They explore the product, explain each decision, and capture evidence a checklist cannot provide.</p>
+                  <button className="button primary motivation-cta" onClick={openRun}>Test your website <Icon name="arrow" size={16} /></button>
+                </article>
+              </div>
+              <div className="motivation-callout"><div className="callout-mark"><Mark /></div><div><strong>What we wanted to change</strong><p>Make usability evidence as easy to collect as a passing test. The result is a record of what each persona saw, tried, and could not finish.</p></div></div>
             </section>
           )}
           {pollError && !demo && (
@@ -1099,11 +1190,10 @@ function App() {
           <footer className="page-footer">
             <span>
               <Mark />
-              Built for people. Tested by personas.
+              PersonaAgent
             </span>
             <span>
-              PersonaAgent <span className="footer-dot">·</span> A little more
-              human.
+              No account required.
             </span>
           </footer>
         </main>
@@ -1208,7 +1298,7 @@ function App() {
       {modal === "persona" && (
         <Modal
           title="Create a persona"
-          subtitle="Define a new way to experience your product."
+          subtitle="Add a behavior profile for future tests."
           onClose={() => {
             if (!busy) setModal(null);
           }}
@@ -1267,56 +1357,6 @@ function App() {
           </form>
         </Modal>
       )}
-      {modal === "help" && (
-        <Modal
-          title="Better experiences start with perspective."
-          subtitle="From a website to real user insights in three steps."
-          onClose={() => setModal(null)}
-        >
-          <div className="help-steps">
-            {[
-              [
-                "01",
-                "Set the destination",
-                "Enter your website URL and a specific task, like finding a product or completing onboarding.",
-              ],
-              [
-                "02",
-                "Choose your people",
-                "Pick personas with different behaviors. Each agent explores in its own browser.",
-              ],
-              [
-                "03",
-                "Understand the experience",
-                "Watch live sessions, review actions and reasoning, and compare task outcomes.",
-              ],
-            ].map(([number, title, copy]) => (
-              <div key={number}>
-                <span>{number}</span>
-                <div>
-                  <h3>{title}</h3>
-                  <p>{copy}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="modal-actions">
-            <button
-              className="button secondary"
-              onClick={() => {
-                setModal(null);
-                startDemo();
-              }}
-            >
-              Explore demo
-            </button>
-            <button className="button primary" onClick={openRun}>
-              Create a test
-              <Icon name="arrow" size={16} />
-            </button>
-          </div>
-        </Modal>
-      )}
       {detail && (
         <Modal
           wide
@@ -1335,7 +1375,7 @@ function App() {
               <i />
               {replayActive ? "Demo replay" : detail.status}
             </span>
-            <span>{detail.personas.length} perspectives</span>
+            <span>{detail.personas.length} personas</span>
             <button className="text-button" onClick={() => exportRun(detail)}>
               <Icon name="download" size={15} />
               Export report
@@ -1406,7 +1446,7 @@ function App() {
                 <p className="score-reason">{result.score_justification}</p>
               )}
               <div className="journey-heading">
-                <h3>The user journey</h3>
+                <h3>Actions</h3>
                 <span>
                   {replayActive
                     ? `${Math.min(replay, result.steps.length)} / `
@@ -1448,7 +1488,7 @@ function App() {
                 {replayActive && (
                   <div className="replay-wait">
                     <span className="loading-dot" />
-                    Replaying the sample journey…
+                    Loading sample actions…
                   </div>
                 )}
               </div>
