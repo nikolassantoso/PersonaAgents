@@ -8,7 +8,7 @@ from models import Persona, Run, TaskResult
 from personas import PERSONAS
 from page_access import PageAccessMonitor
 
-AgentFunction = Callable[[Page, Persona, str, PageAccessMonitor], TaskResult]
+AgentFunction = Callable[[Page, Persona, str, PageAccessMonitor, str], TaskResult]
 
 import os
 from urllib.parse import quote_plus
@@ -30,7 +30,7 @@ def format_error(exc: Exception) -> str:
 def execute_persona(run: Run, persona: Persona, agent: AgentFunction) -> TaskResult:
     with open_persona_browser(str(run.url)) as (session, page, access):
         run.session_viewer_urls[persona.id] = session.session_viewer_url
-        return agent(page, persona, run.task, access)
+        return agent(page, persona, run.task, access, run.id)
 
 def execute_run(run: Run, agent: AgentFunction) -> None:
     run.status = "running"
