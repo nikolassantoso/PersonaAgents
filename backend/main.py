@@ -72,7 +72,7 @@ async def create_run(request: RunRequest, background_tasks: BackgroundTasks) -> 
     unknown_personas = [
         persona_name
         for persona_name in request.personas
-        if persona_name not in PERSONAS
+        if persona_name not in request.persona_definitions and persona_name not in PERSONAS
     ]
 
     if unknown_personas:
@@ -88,9 +88,18 @@ async def create_run(request: RunRequest, background_tasks: BackgroundTasks) -> 
         )
 
     run_id = str(uuid4())
+    definitions = {
+        persona_id: (
+            Persona(id=persona_id, **request.persona_definitions[persona_id].model_dump())
+            if persona_id in request.persona_definitions
+            else PERSONAS[persona_id].model_copy(deep=True)
+        )
+        for persona_id in request.personas
+    }
     RUNS[run_id] = Run(
         id=run_id,
-        **request.model_dump(),
+        **request.model_dump(exclude={"persona_definitions"}),
+        persona_definitions=definitions,
     )
 
     background_tasks.add_task(
@@ -160,7 +169,7 @@ async def create_revamp(id: str, background_tasks: BackgroundTasks) -> Revamp:
         images=images,
     )
     REVAMPS[id] = revamp
-    background_tasks.add_task(execute_revamp, run, PERSONAS, revamp)
+    background_tasks.add_task(execute_revamp, run, run.persona_definitions, revamp)
     return revamp
 
 
