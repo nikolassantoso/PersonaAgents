@@ -67,3 +67,10 @@ class Run(RunRequest):
     session_viewer_urls: dict[str, str] = Field(default_factory=dict)
     results: dict[str, TaskResult] = Field(default_factory=dict)
     errors: dict[str, str] = Field(default_factory=dict)
+
+class PersonaCreate(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=100)
+    system_prompt: str = Field(min_length=1, max_length=10_000)

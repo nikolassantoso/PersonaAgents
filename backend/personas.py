@@ -50,3 +50,5 @@ DEFAULT_PERSONAS: dict[str, Persona] = {
         )
     )
 }
+
+PERSONAS: dict[str, Persona] = DEFAULT_PERSONAS.copy()

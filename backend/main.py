@@ -4,6 +4,7 @@ PersonaAgent - FastAPI server
 
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -11,7 +12,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from persona_agent import run_persona_agent
 from runner import execute_run
 
-from personas import DEFAULT_PERSONAS
+from personas import PERSONAS
 
 load_dotenv()
 
@@ -21,9 +22,19 @@ app = FastAPI(title="PersonaAgent", version="0.1.0")
 from models import Persona
 from models import RunRequest
 from models import Run
+from models import PersonaCreate
 
 # In-memory storage for runs
 RUNS: dict[str, Run] = {}
+
+def create_persona_id(name: str) -> str:
+    persona_id = re.sub(r"[^a-z0-9]+", "_", name.lower())
+    persona_id = persona_id.strip("_")
+
+    if not persona_id:
+        persona_id = f"persona_{uuid4().hex[:8]}"
+
+    return persona_id
 
 # REST API routes
 @app.get("/health")
@@ -32,14 +43,31 @@ async def health_check() -> dict[str, str]:
 
 @app.get("/personas")
 async def list_personas() -> dict[str, Persona]:
-    return DEFAULT_PERSONAS
+    return PERSONAS
+
+@app.post("/personas", response_model=Persona, status_code=201)
+async def create_persona(request: PersonaCreate) -> Persona:
+    persona_id = create_persona_id(request.name)
+    if persona_id in PERSONAS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A persona with the ID '{persona_id}' already exists.",
+        )
+
+    persona = Persona(
+        id=persona_id,
+        **request.model_dump(),
+    )
+
+    PERSONAS[persona_id] = persona
+    return persona
 
 @app.post("/runs", status_code=201)
 async def create_run(request: RunRequest, background_tasks: BackgroundTasks) -> dict[str, str]:
     unknown_personas = [
         persona_name
         for persona_name in request.personas
-        if persona_name not in DEFAULT_PERSONAS
+        if persona_name not in PERSONAS
     ]
 
     if unknown_personas:
