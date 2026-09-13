@@ -16,6 +16,7 @@ export interface Result {
     reasoning: string;
     outcome: string;
     value?: string | null;
+    screenshot_url?: string | null;
   }[];
   access_checks?: { state: string; evidence: string[] }[];
 }

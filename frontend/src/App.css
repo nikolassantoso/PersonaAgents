@@ -1530,6 +1530,14 @@ textarea {
   color: #8da075;
   overflow-wrap: anywhere;
 }
+.step-screenshot {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 12px;
+  border: 1px solid #e2e9dc;
+  border-radius: 8px;
+}
 .live-session {
   display: flex;
   align-items: center;

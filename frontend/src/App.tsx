@@ -1401,6 +1401,19 @@ function App() {
                         </div>
                         <p>{step.reasoning}</p>
                         {step.value && <code>{step.value}</code>}
+                        {step.screenshot_url && (
+                          <img
+                            className="step-screenshot"
+                            src={
+                              /^https?:\/\//i.test(step.screenshot_url)
+                                ? step.screenshot_url
+                                : `${API}/${step.screenshot_url.replace(/^\/+/, "")}`
+                            }
+                            alt={`Screenshot for step ${step.step}: ${step.action.replaceAll("_", " ")}`}
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        )}
                       </div>
                     </div>
                   ))}
