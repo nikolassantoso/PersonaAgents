@@ -4,11 +4,13 @@ PersonaAgent - FastAPI server
 
 from __future__ import annotations
 
+import os
 import re
 from uuid import uuid4
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from persona_agent import run_persona_agent
 from runner import execute_run
@@ -21,6 +23,22 @@ from revamp import execute_revamp, image_settings
 load_dotenv()
 
 app = FastAPI(title="PersonaAgent", version="0.1.0")
+
+# Direct browser requests from Vercel need CORS; Vite's local proxy does not.
+cors_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get(
+        "CORS_ALLOW_ORIGINS",
+        "https://persona-agents-nu.vercel.app,http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 # Request / Response Models
 from models import Persona
