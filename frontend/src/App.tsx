@@ -256,7 +256,7 @@ function metrics(runs: Run[]) {
       ? Math.round(
           (results.filter((r) => r.success).length / results.length) * 100,
         )
-      : 0,
+      : null,
     score: scores.length
       ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1)
       : "—",
@@ -288,7 +288,7 @@ function loadRuns(): Run[] {
 
 function App() {
   const [page, setPage] = useState("Overview");
-  const [demo, setDemo] = useState(true);
+  const [demo, setDemo] = useState(false);
   const [personas, setPersonas] = useState<Persona[]>(() => {
     const saved = loadSavedPersonas();
     return saved.length ? saved : fallbackPersonas;
@@ -761,7 +761,7 @@ function App() {
                 },
                 {
                   label: "Task completion",
-                  value: `${stats.success}%`,
+                  value: stats.success == null ? "—" : `${stats.success}%`,
                   icon: "check",
                   foot: "Across completed persona results",
                 },
@@ -785,7 +785,7 @@ function App() {
                   </div>
                   <div className={`stat-value ${i === 1 ? "green" : ""}`}>
                     {stat.value}
-                    {i === 2 && <span>/ 10</span>}
+                    {i === 2 && stats.score !== "—" && <span>/ 10</span>}
                     <span
                       className={`stat-decoration decoration-${i}`}
                       aria-hidden="true"
