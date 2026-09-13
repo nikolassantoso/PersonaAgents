@@ -73,6 +73,9 @@ class Run(RunRequest):
 class RevampImage(BaseModel):
     persona_id: str
     step: int
+    reasoning: str
+    score: int | None
+    score_justification: str | None
     original_screenshot_url: str
     fixed_screenshot_url: str | None = None
     status: Literal["pending", "generating", "completed", "failed"] = "pending"

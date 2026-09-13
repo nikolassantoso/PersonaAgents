@@ -132,6 +132,9 @@ async def create_revamp(id: str, background_tasks: BackgroundTasks) -> Revamp:
         RevampImage(
             persona_id=persona_id,
             step=step.step,
+            reasoning=step.reasoning,
+            score=result.score,
+            score_justification=result.score_justification,
             original_screenshot_url=step.screenshot_url,
         )
         for persona_id, result in run.results.items()
