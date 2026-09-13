@@ -19,6 +19,7 @@ def format_error(exc: Exception) -> str:
         "STEEL_API_KEY",
         "CLAUDE_API_KEY",
         "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
     ):
         secret = os.environ.get(variable_name)
 
