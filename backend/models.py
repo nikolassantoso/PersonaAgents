@@ -69,6 +69,26 @@ class Run(RunRequest):
     results: dict[str, TaskResult] = Field(default_factory=dict)
     errors: dict[str, str] = Field(default_factory=dict)
 
+
+class RevampImage(BaseModel):
+    persona_id: str
+    step: int
+    original_screenshot_url: str
+    fixed_screenshot_url: str | None = None
+    status: Literal["pending", "generating", "completed", "failed"] = "pending"
+    error: str | None = None
+
+
+class Revamp(BaseModel):
+    run_id: str
+    status: Literal["created", "running", "completed", "partial", "failed"] = "created"
+    model: str
+    quality: Literal["low", "medium", "high", "xhigh", "max", "auto"]
+    total_images: int
+    completed_images: int = 0
+    images: list[RevampImage] = Field(default_factory=list)
+    error: str | None = None
+
 class PersonaCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
