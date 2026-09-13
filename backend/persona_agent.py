@@ -5,7 +5,7 @@ from typing import Literal
 
 import anthropic
 from playwright.sync_api import Error as PlaywrightError, Page
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from models import PageAccessCheck, Persona, StepRecord, TaskResult
 from page_access import PageAccessMonitor
@@ -31,6 +31,14 @@ class BrowserDecision(BaseModel):
     success: bool | None = None
     reasoning: str
     summary: str
+    score: int | None = Field(
+        default=None, ge=0, le=10, strict=True,
+        description="Required for finish with success=true: overall usability for this persona, from 0 to 10.",
+    )
+    score_justification: str | None = Field(
+        default=None,
+        description="Required for a successful finish: justify the score using the full step history and earlier persona reasoning.",
+    )
 
 def get_page_zoom_percent(page: Page) -> float:
     """Read the current document's CSS zoom, including after navigation."""
@@ -209,6 +217,8 @@ Action rules:
 - back: navigate to the previous page.
 - finish: use only when the task has succeeded or cannot be completed.
 - For finish, set success to true or false and explain the outcome in summary.
+- For finish with success=true, also provide score and score_justification
+  following the scoring rules below. For other decisions, leave both null.
 - Do not claim success merely because the website loaded.
 - Only choose element indexes listed in interactive_elements.
 
@@ -243,6 +253,23 @@ Exploration rules:
 - Do not finish before step 4 unless the task is genuinely impossible on this
   site. Before finishing, make sure you have looked at the whole page and at
   the main navigation.
+
+Scoring rules for a successful finish:
+- Give an integer score from 0 to 10 for the overall usability of completing
+  this task as this persona. Success alone does not justify a high score.
+- Review ALL recorded steps, their outcomes, and your earlier reasoning in
+  Actions you have already taken, together with the persona's needs, assigned
+  task, and current screenshot/observation. Do not judge only the final page.
+- Consider readability, clarity of labels/navigation, feedback, effort,
+  confusion, failed attempts, and recovery across the whole journey.
+- Use this scale consistently: 0-2 extremely difficult/frustrating; 3-4
+  difficult; 5-6 mixed; 7-8 mostly clear with minor friction; 9-10 very clear
+  and easy for this persona.
+- In score_justification, write two to four sentences in the persona's voice.
+  Cite specific step numbers and observations where available, explain what
+  helped or hindered you, and connect that evidence to the score. Do not
+  invent issues or positive experiences that were not observed. Distinguish
+  automation/infrastructure failures from problems with the site's usability.
 
 In reasoning, state in two or three sentences, in the voice of your persona,
 what you see, what you have learned so far, and why you are choosing this
@@ -300,7 +327,12 @@ def execute_action(page: Page, decision: BrowserDecision) -> TaskResult | None:
         if decision.success is None:
             raise ValueError("A finish decision must include a success value.")
 
-        return TaskResult(success=decision.success, summary=decision.summary)
+        return TaskResult(
+            success=decision.success,
+            summary=decision.summary,
+            score=decision.score if decision.success else None,
+            score_justification=decision.score_justification if decision.success else None,
+        )
 
     if decision.action == "zoom":
         if decision.element_index is not None:

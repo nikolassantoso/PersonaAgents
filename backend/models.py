@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 from typing import Literal
 
 # Request / Response Models
@@ -45,9 +45,21 @@ class PageAccessCheck(BaseModel):
 class TaskResult(BaseModel):
     success: bool
     summary: str
+    score: int | None = Field(default=None, ge=0, le=10, strict=True)
+    score_justification: str | None = None
     steps: list[StepRecord] = Field(default_factory=list)
     failure_reason: AccessFailureReason | Literal["no_progress"] | None = None
     access_checks: list[PageAccessCheck] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_success_score(self):
+        if self.success:
+            if self.score is None:
+                raise ValueError("A successful result requires a score from 0 to 10.")
+            if not self.score_justification or not self.score_justification.strip():
+                raise ValueError("A successful result requires a nonblank score_justification.")
+            self.score_justification = self.score_justification.strip()
+        return self
 
 class Run(RunRequest):
     id: str
