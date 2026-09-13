@@ -5,7 +5,6 @@ from playwright.sync_api import Page
 
 from browser import open_persona_browser
 from models import Persona, Run, TaskResult
-from personas import PERSONAS
 from page_access import PageAccessMonitor
 
 AgentFunction = Callable[[Page, Persona, str, PageAccessMonitor, str], TaskResult]
@@ -46,7 +45,7 @@ def execute_run(run: Run, agent: AgentFunction) -> None:
                 executor.submit(
                     execute_persona,
                     run,
-                    PERSONAS[persona_id],
+                    run.persona_definitions[persona_id],
                     agent, 
                 ): persona_id
                 for persona_id in run.personas
