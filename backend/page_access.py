@@ -98,7 +98,7 @@ class PageAccessMonitor:
             "requestfailed": self._on_request_failed, "crash": self._on_crash,
         }
         for event, handler in self._listeners.items():
-            page.on(event, handler)
+            page.on(event, handler) # type: ignore
 
     @classmethod
     def from_environment(cls, page: Page, captcha_status: CaptchaStatusReader | None = None):
