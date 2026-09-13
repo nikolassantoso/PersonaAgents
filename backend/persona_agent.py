@@ -4,10 +4,11 @@ import os
 from typing import Literal
 
 import anthropic
-from playwright.sync_api import Page
+from playwright.sync_api import Error as PlaywrightError, Page
 from pydantic import BaseModel
 
-from models import Persona, StepRecord, TaskResult
+from models import PageAccessCheck, Persona, StepRecord, TaskResult
+from page_access import PageAccessMonitor
 
 CLAUDE_MODEL = "claude-sonnet-5"
 MAX_OUTPUT_TOKENS = 4096
@@ -72,7 +73,7 @@ def zoom_page(page: Page, value: str | None) -> None:
     )
 
 
-def observe_page(page: Page) -> str:
+def observe_page(page: Page, access_check: PageAccessCheck | None = None) -> str:
     element_details = page.locator(INTERACTIVE_SELECTOR).evaluate_all(
         """
         elements => {
@@ -132,6 +133,7 @@ def observe_page(page: Page) -> str:
     observation = {
         "url": page.url,
         "title": page.title(),
+        "page_access": access_check.model_dump() if access_check else {"state": "unknown"},
         "zoom_percent": get_page_zoom_percent(page),
         "scroll_position": viewport,
         "at_page_bottom": (
@@ -167,8 +169,8 @@ def format_history(history: list[StepRecord]) -> str:
 
     return "\n".join(lines)
 
-def choose_next_action(client: anthropic.Anthropic, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord]) -> BrowserDecision:
-    observation = observe_page(page)
+def choose_next_action(client: anthropic.Anthropic, page: Page, persona: Persona, task: str, step_number: int, history: list[StepRecord], access_check: PageAccessCheck | None = None) -> BrowserDecision:
+    observation = observe_page(page, access_check)
     screenshot = page.screenshot(type="png")
 
     prompt = f"""
@@ -211,6 +213,15 @@ Action rules:
 - Only choose element indexes listed in interactive_elements.
 
 Progress rules:
+- page_access contains browser and Steel CAPTCHA evidence. "unknown" means
+  access has not been established, not that the page is usable or blocked.
+- Do not solve CAPTCHAs yourself. Steel handles enabled CAPTCHA solving, and
+  the runner waits for active solving before asking you for another action.
+- Login screens, cookie notices, subscription screens, and HTTP errors are
+  not automatically automation blocks. Interpret them in the task's context.
+- If an error occurs after navigation, consider going back or using another
+  visible route. Report errors as test findings. Never claim success just
+  because Steel finished a CAPTCHA task or the page returned HTTP 200.
 - Never repeat an action that already appears above with a failed outcome.
 - If the same approach has failed twice, choose a different path or finish
   with success set to false.
@@ -362,16 +373,32 @@ def execute_action(page: Page, decision: BrowserDecision) -> TaskResult | None:
     page.wait_for_timeout(500)
     return None
 
-def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
-    api_key = os.environ.get("CLAUDE_API_KEY")
-    if not api_key:
-        raise ValueError("CLAUDE_API_KEY environment variable is not set.")
-
-    client = anthropic.Anthropic(api_key=api_key)
+def run_persona_agent(page: Page, persona: Persona, task: str, access: PageAccessMonitor | None = None) -> TaskResult:
+    owned_access = access is None
+    access = access or PageAccessMonitor.from_environment(page)
+    client = None
     history: list[StepRecord] = []
+    access_checks: list[PageAccessCheck] = []
+    previous_failure: tuple | None = None
 
     try:
         for step_number in range(1, MAX_STEPS + 1):
+            access_check = access.check(initial=not history)
+            access_checks.append(access_check)
+            if access_check.failure_reason:
+                return TaskResult(
+                    success=False,
+                    failure_reason=access_check.failure_reason,
+                    summary=f"Persona session stopped: {access_check.failure_reason.replace('_', ' ')}. "
+                    + " ".join(access_check.evidence),
+                    steps=history,
+                    access_checks=access_checks,
+                )
+            if client is None:
+                api_key = os.environ.get("CLAUDE_API_KEY")
+                if not api_key:
+                    raise ValueError("CLAUDE_API_KEY environment variable is not set.")
+                client = anthropic.Anthropic(api_key=api_key)
             try:
                 decision = choose_next_action(
                     client=client, 
@@ -379,7 +406,14 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
                     persona=persona, 
                     task=task, 
                     step_number=step_number, 
-                    history=history
+                    history=history,
+                    access_check=access_check,
+                )
+            except PlaywrightError as exc:
+                return TaskResult(
+                    success=False, failure_reason="browser_error",
+                    summary=f"The browser could not be observed at step {step_number} ({type(exc).__name__}).",
+                    steps=history, access_checks=access_checks,
                 )
             except Exception as exc:
                 if not history:
@@ -393,8 +427,10 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
                         f"{type(exc).__name__}: {exc}"
                     ),
                     steps=history,
+                    access_checks=access_checks,
                 )
 
+            action_url = page.url
             try:
                 result = execute_action(
                     page=page,
@@ -419,7 +455,19 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
             )
 
             if result is not None:
-                return result.model_copy(update={"steps": history})
+                return result.model_copy(update={"steps": history, "access_checks": access_checks})
+
+            failure = (action_url, decision.action, decision.element_index, decision.value)
+            if outcome.startswith("failed:"):
+                if failure == previous_failure:
+                    return TaskResult(
+                        success=False, failure_reason="no_progress",
+                        summary="The same action failed twice consecutively on the same page.",
+                        steps=history, access_checks=access_checks,
+                    )
+                previous_failure = failure
+            else:
+                previous_failure = None
 
         return TaskResult(
             success=False,
@@ -428,6 +476,10 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
                 f"without completing the task."
             ),
             steps=history,
+            access_checks=access_checks,
         )
     finally:
-        client.close()
+        if client is not None:
+            client.close()
+        if owned_access:
+            access.close()
