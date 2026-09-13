@@ -550,35 +550,6 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-bottom">
-          <div className="demo-card">
-            <span className="spark">✧</span>
-            <strong>
-              A little perspective
-              <br />
-              changes everything.
-            </strong>
-            <p>
-              See how agents experience
-              <br />a real user journey.
-            </p>
-            <button onClick={startDemo}>
-              Explore the demo <Icon name="arrow" size={15} />
-            </button>
-          </div>
-          <button className="nav-item help" onClick={() => setModal("help")}>
-            <Icon name="help" />
-            Getting started
-            <Icon name="external" size={14} />
-          </button>
-          <div className="profile">
-            <span className="profile-avatar">Y</span>
-            <div>
-              <strong>Your workspace</strong>
-              <span>Build something people love</span>
-            </div>
-          </div>
-        </div>
       </aside>
       <div className="main-shell" inert={!!modal || !!selectedRun}>
         <header className="topbar">
