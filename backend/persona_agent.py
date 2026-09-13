@@ -12,6 +12,8 @@ from models import Persona, StepRecord, TaskResult
 CLAUDE_MODEL = "claude-sonnet-5"
 MAX_OUTPUT_TOKENS = 4096
 MAX_STEPS = 40
+MAX_BODY_TEXT_CHARS = 40_000
+MAX_REPORTED_ELEMENTS = 400
 
 INTERACTIVE_SELECTOR = (
     'a, button, input, textarea, select, '
@@ -79,6 +81,11 @@ def observe_page(page: Page) -> str:
 
     body_text = page.locator("body").inner_text(timeout=10_000)
 
+    reported_elements = sorted(
+        element_details,
+        key=lambda element: not element["in_viewport"],
+    )[:MAX_REPORTED_ELEMENTS]
+
     observation = {
         "url": page.url,
         "title": page.title(),
@@ -87,8 +94,11 @@ def observe_page(page: Page) -> str:
             viewport["scroll_y"] + viewport["viewport_height"]
             >= viewport["page_height"] - 2
         ),
-        "body_text": body_text[:6000],
-        "interactive_elements": element_details[:100],
+        "body_text": body_text[:MAX_BODY_TEXT_CHARS],
+        "body_text_total_chars": len(body_text),
+        "body_text_truncated": len(body_text) > MAX_BODY_TEXT_CHARS,
+        "interactive_elements": reported_elements,
+        "interactive_elements_omitted": len(element_details) - len(reported_elements),
     }
 
     return json.dumps(observation, ensure_ascii=False)
@@ -105,7 +115,11 @@ def format_history(history: list[StepRecord]) -> str:
             parts.append(f"element {record.element_index}")
         if record.value:
             parts.append(f"value={record.value!r}")
+
         lines.append(f"{' '.join(parts)} -> {record.outcome}")
+
+        if record.reasoning:
+            lines.append(f"   you were thinking: {record.reasoning}")
 
     return "\n".join(lines)
 
@@ -148,15 +162,30 @@ Progress rules:
 - Never repeat an action that already appears above with a failed outcome.
 - If the same approach has failed twice, choose a different path or finish
   with success set to false.
-- If the information the task asks for is already visible in body_text,
-  finish now instead of clicking further.
 - Elements with in_viewport set to false are on the page but off screen. Scroll
   them into view before trying to click them.
 - Do not scroll again if at_page_bottom is true, or if your last two actions
   were both scrolls in the same direction and no new elements appeared.
+- body_text holds the whole page's text no matter where the page is scrolled,
+  so scroll to bring elements within reach, not to read more text.
+- If interactive_elements_omitted is above zero, the page has more controls than
+  you were shown. Scroll to bring the ones you need into view.
 
-In reasoning, state in one or two sentences, in the voice of your persona,
-what you see and why you are choosing this action.
+Exploration rules:
+- This is a usability test, not a trivia question. Your job is to find out
+  whether a real user can accomplish this task through the interface, so use
+  the interface instead of only reading the page.
+- Finding an answer written in body_text is not the same as completing the
+  task. Follow the links, menus, and controls a real user would follow.
+- Do not finish before step 4 unless the task is genuinely impossible on this
+  site. Before finishing, make sure you have looked at the whole page and at
+  the main navigation.
+
+In reasoning, state in two or three sentences, in the voice of your persona,
+what you see, what you have learned so far, and why you are choosing this
+action. Call out anything confusing, hard to find, or badly labelled. Those
+observations are the point of this test, and you will be shown your own
+reasoning again on later steps.
 
 Page observation:
 {observation}
