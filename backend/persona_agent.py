@@ -14,6 +14,8 @@ MAX_OUTPUT_TOKENS = 4096
 MAX_STEPS = 40
 MAX_BODY_TEXT_CHARS = 40_000
 MAX_REPORTED_ELEMENTS = 400
+MIN_ZOOM_PERCENT = 25
+MAX_ZOOM_PERCENT = 500
 
 INTERACTIVE_SELECTOR = (
     'a, button, input, textarea, select, '
@@ -22,12 +24,53 @@ INTERACTIVE_SELECTOR = (
 )
 
 class BrowserDecision(BaseModel):
-    action: Literal["click", "fill", "press", "back", "scroll", "goto", "finish"]
+    action: Literal["click", "fill", "press", "back", "scroll", "zoom", "goto", "finish"]
     element_index: int | None = None
     value: str | None = None
     success: bool | None = None
     reasoning: str
     summary: str
+
+def get_page_zoom_percent(page: Page) -> float:
+    """Read the current document's CSS zoom, including after navigation."""
+    return page.evaluate(
+        """() => (parseFloat(getComputedStyle(document.documentElement).zoom) || 1) * 100"""
+    )
+
+
+def zoom_page(page: Page, value: str | None) -> None:
+    """Set absolute CSS page magnification and verify the computed result.
+
+    This reflows page content but does not emulate native browser zoom's
+    viewport/media-query changes. A new document uses its own initial zoom.
+    """
+    try:
+        percent = float((value or "").strip().removesuffix("%"))
+    except ValueError:
+        raise ValueError(
+            "A zoom action requires a percentage in value, such as '150'."
+        ) from None
+
+    if not MIN_ZOOM_PERCENT <= percent <= MAX_ZOOM_PERCENT:
+        raise ValueError(
+            f"Zoom must be between {MIN_ZOOM_PERCENT}% and {MAX_ZOOM_PERCENT}%."
+        )
+
+    page.evaluate(
+        """percent => document.documentElement.style.setProperty(
+            "zoom", String(percent / 100), "important"
+        )""",
+        percent,
+    )
+    page.wait_for_function(
+        """percent => Math.abs(
+            (parseFloat(getComputedStyle(document.documentElement).zoom) || 1)
+            * 100 - percent
+        ) < 0.1""",
+        arg=percent,
+        timeout=2_000,
+    )
+
 
 def observe_page(page: Page) -> str:
     element_details = page.locator(INTERACTIVE_SELECTOR).evaluate_all(
@@ -89,6 +132,7 @@ def observe_page(page: Page) -> str:
     observation = {
         "url": page.url,
         "title": page.title(),
+        "zoom_percent": get_page_zoom_percent(page),
         "scroll_position": viewport,
         "at_page_bottom": (
             viewport["scroll_y"] + viewport["viewport_height"]
@@ -149,6 +193,14 @@ Action rules:
 - fill: provide the element_index and text in value.
 - press: provide the element_index and keyboard key in value, or omit
   element_index to send the key to the page itself.
+- zoom: omit element_index and provide an absolute percentage in value,
+  such as "150" for 150% or "100" to reset. The allowed range is
+  {MIN_ZOOM_PERCENT}% to {MAX_ZOOM_PERCENT}%. This sets CSS page magnification.
+  Always use this action to enlarge page content; do not use press with
+  Ctrl+Plus or other browser zoom shortcuts.
+  zoom_percent reports the current document's applied zoom. If it is already
+  at your desired level, continue the task instead of zooming again.
+  Navigation to a new document can reset zoom; check zoom_percent afterward.
 - scroll: provide "down" or "up" in value.
 - goto: provide an absolute URL in value. Use this only to return to the site
   under test if you have navigated away from it.
@@ -238,6 +290,12 @@ def execute_action(page: Page, decision: BrowserDecision) -> TaskResult | None:
             raise ValueError("A finish decision must include a success value.")
 
         return TaskResult(success=decision.success, summary=decision.summary)
+
+    if decision.action == "zoom":
+        if decision.element_index is not None:
+            raise ValueError("A zoom action applies to the page; omit element_index.")
+        zoom_page(page, decision.value)
+        return None
 
     if decision.action == "back":
         page.go_back(wait_until="domcontentloaded", timeout=30_000)
@@ -343,6 +401,8 @@ def run_persona_agent(page: Page, persona: Persona, task: str) -> TaskResult:
                     decision=decision
                 )
                 outcome = "ok"
+                if decision.action == "zoom":
+                    outcome = f"ok: CSS page zoom is now {get_page_zoom_percent(page):g}%"
             except Exception as exc:
                 result = None 
                 outcome = f"failed: {type(exc).__name__}: {exc}"
